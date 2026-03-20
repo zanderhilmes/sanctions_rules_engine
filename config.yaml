@@ -1,0 +1,19 @@
+api_key: "${ANTHROPIC_API_KEY}"
+
+llm:
+  model: "claude-haiku-4-5-20251001"
+  escalation_model: "claude-sonnet-4-6"
+  strong_model_score_threshold: 70.0
+  max_tokens: 512
+
+rules:
+  auto_clear_confidence_threshold: 0.65
+  escalate_hard_weight: 0.90
+  clear_hard_weight: 0.90
+  low_score_clear_threshold: 30.0
+  common_names_file: "data/common_names.txt"
+  age_improbability_max_years: 5
+
+output:
+  csv_path: "output/audit_trail.csv"
+  json_path: "output/audit_trail.json"
