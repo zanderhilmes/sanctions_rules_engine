@@ -5,7 +5,7 @@ Watchlist Analyst User Guide.
 Decision table (order-independent token-set comparison):
 
   Case 1 — Equal token counts
-    All tokens match   → ESCALATE (weight 0.95, hard-escalate)
+    All tokens match   → ESCALATE (weight 0.80 → PENDING → LLM review)
     Not all match      → CLEAR   (weight 0.85, F+ 1A)
 
   Case 2 — Customer has MORE tokens than SDN
@@ -13,8 +13,13 @@ Decision table (order-independent token-set comparison):
     Rationale: extra tokens indicate a different person.
 
   Case 3 — SDN has MORE tokens than customer
-    All customer tokens found in SDN tokens → ESCALATE (weight 0.95)
+    All customer tokens found in SDN tokens → ESCALATE (weight 0.80 → PENDING → LLM review)
     Not all customer tokens in SDN tokens   → CLEAR   (weight 0.85, F+ 1A)
+
+Name escalation weight (0.80) is intentionally below the hard-escalate threshold (0.90)
+so these cases proceed to DOB check and then LLM review rather than auto-escalating.
+The DOB mismatch rule (hard CLEAR, 0.90) overrides a name escalation when DOB data is
+available. Without DOB data the alert falls to PENDING and the LLM makes the final call.
 
 Name normalization before comparison:
   - Lowercase + uppercase normalization (case-insensitive)
@@ -33,8 +38,8 @@ from typing import FrozenSet
 from sanctions.models import Alert, RuleFlag
 from sanctions.rules.base_rule import BaseRule
 
-_CLEAR_WEIGHT = 0.85    # Exceeds auto_clear threshold (0.65) on its own
-_ESCALATE_WEIGHT = 0.95  # Exceeds escalate_hard_weight (0.90) → hard escalate
+_CLEAR_WEIGHT = 0.85    # Exceeds auto_clear threshold (0.65) on its own → AUTO_CLEAR
+_ESCALATE_WEIGHT = 0.80  # Below escalate_hard_weight (0.90) → PENDING → LLM review
 
 
 def _tokenize(name: str) -> FrozenSet[str]:

@@ -4,9 +4,12 @@ AliasMatchRule — checks the customer name against all SDN aliases.
 From the guide: "Make sure the alias does not match as well."
 
 A name mismatch against the primary SDN name is NOT sufficient to clear if
-any alias matches. This rule fires ESCALATE (weight 0.95 → hard escalate)
+any alias matches. This rule fires ESCALATE (weight 0.80 → PENDING → LLM)
 when the customer name tokens match any SDN alias using the same token-set
 logic as NameComponentRule.
+
+Weight is intentionally below the hard-escalate threshold (0.90) so alias
+matches proceed to DOB check and then LLM review rather than auto-escalating.
 
 Alias matching cases (mirrors NameComponentRule):
   - Customer tokens == alias tokens (any order) → ESCALATE
@@ -24,7 +27,7 @@ from sanctions.models import Alert, RuleFlag
 from sanctions.rules.base_rule import BaseRule
 from sanctions.rules.rule_name_components import _tokenize
 
-_ESCALATE_WEIGHT = 0.95  # Hard-escalate threshold
+_ESCALATE_WEIGHT = 0.80  # Below hard-escalate threshold (0.90) → PENDING → LLM review
 
 
 class AliasMatchRule(BaseRule):
