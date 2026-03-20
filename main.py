@@ -13,6 +13,13 @@ import logging
 import sys
 from pathlib import Path
 
+# Load .env if present (no-op if file doesn't exist or dotenv not installed)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
