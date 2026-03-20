@@ -14,6 +14,16 @@ rules:
   common_names_file: "data/common_names.txt"
   age_improbability_max_years: 5
 
+snowflake:
+  enabled: false
+  account: "${SNOWFLAKE_ACCOUNT}"    # e.g. xy12345.us-east-1
+  user: "${SNOWFLAKE_USER}"
+  password: "${SNOWFLAKE_PASSWORD}"
+  warehouse: "${SNOWFLAKE_WAREHOUSE}"
+  database: "APP_CASH"
+  schema_name: "HEALTH"
+  table: "IDENTITY_IDV_ATTEMPTS"
+
 output:
   csv_path: "output/audit_trail.csv"
   json_path: "output/audit_trail.json"

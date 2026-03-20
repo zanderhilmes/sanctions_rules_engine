@@ -19,6 +19,7 @@ class Decision(str, Enum):
 class Alert(BaseModel):
     """Incoming alert from the screening system."""
     alert_id: str
+    account_id: Optional[str] = None        # Internal account identifier (links to Snowflake)
     customer_name: str
     sdn_name: str
     match_score: float = Field(ge=0.0, le=100.0)

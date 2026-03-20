@@ -13,6 +13,7 @@ from typing import List, Optional
 import pandas as pd
 
 from sanctions.config import AppConfig
+from sanctions.enrichment.snowflake_enricher import SnowflakeEnricher
 from sanctions.llm.claude_client import ClaudeClient
 from sanctions.models import Alert, AuditRecord, Decision, Disposition
 from sanctions.rules.registry import RuleRegistry
@@ -59,6 +60,24 @@ class SanctionsPipeline:
         self.registry.register(CommonNameRule(common_names_file=config.rules.common_names_file))
         self.registry.register(GeographyRule())
 
+        self._snowflake: Optional[SnowflakeEnricher] = None
+        sf = config.snowflake
+        if sf.enabled and sf.account and not sf.account.startswith("${"):
+            try:
+                self._snowflake = SnowflakeEnricher(
+                    account=sf.account,
+                    user=sf.user,
+                    password=sf.password,
+                    warehouse=sf.warehouse,
+                    database=sf.database,
+                    schema=sf.schema_name,
+                    table=sf.table,
+                )
+            except Exception as exc:
+                log.warning("Snowflake enricher disabled — connection failed: %s", exc)
+        elif sf.enabled:
+            log.warning("Snowflake enabled in config but credentials not set — skipping")
+
         self._llm: Optional[ClaudeClient] = None
         if config.api_key and not config.api_key.startswith("${"):
             self._llm = ClaudeClient(
@@ -75,6 +94,10 @@ class SanctionsPipeline:
             )
 
     def _process_alert(self, alert: Alert) -> AuditRecord:
+        # Snowflake enrichment — backfills customer_dob and customer_verified
+        if self._snowflake is not None:
+            self._snowflake.enrich(alert)
+
         # Derive state from zip if enrichment didn't supply it
         if not alert.customer_state:
             alert.customer_state = zip_to_state(alert.zip_code)
@@ -332,6 +355,7 @@ def _load_from_bridger_csv(path: str) -> List[Alert]:
 
         alerts.append(Alert(
             alert_id=aid,
+            account_id=_opt(row.get("account_id")),
             customer_name=str(row.get("Name", "")).strip(),
             sdn_name=entity_name,
             match_score=score,

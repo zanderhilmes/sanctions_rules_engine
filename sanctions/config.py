@@ -42,6 +42,17 @@ class RulesConfig(BaseModel):
     age_improbability_max_years: int = 5
 
 
+class SnowflakeConfig(BaseModel):
+    enabled: bool = False
+    account: str = ""       # e.g. xy12345.us-east-1
+    user: str = ""
+    password: str = ""
+    warehouse: str = ""
+    database: str = "APP_CASH"
+    schema_name: str = "HEALTH"
+    table: str = "IDENTITY_IDV_ATTEMPTS"
+
+
 class OutputConfig(BaseModel):
     csv_path: str = "output/audit_trail.csv"
     json_path: str = "output/audit_trail.json"
@@ -51,6 +62,7 @@ class AppConfig(BaseModel):
     api_key: str = ""
     llm: LLMConfig = LLMConfig()
     rules: RulesConfig = RulesConfig()
+    snowflake: SnowflakeConfig = SnowflakeConfig()
     output: OutputConfig = OutputConfig()
 
 
