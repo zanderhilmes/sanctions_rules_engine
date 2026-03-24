@@ -306,19 +306,19 @@ def _bridger_dob(raw: Optional[str]) -> Optional[str]:
 
 def _extract_customer_token(raw: Optional[str]) -> Optional[str]:
     """
-    Normalize a Bridger account_id to a plain customer token.
+    Normalize a Bridger account_id to a plain customer token for Snowflake lookup.
 
-    Cash App:  'c-abc123...'
-               → 'c-abc123...'  (unchanged — already a customer token)
-
-    Square:    'legal_entity_node-AX9UW6J1ZqQtUqTUO;be063a74-470f-4c26-b9f6-...'
-               → 'AX9UW6J1ZqQtUqTUO'  (part between prefix and semicolon)
+    Cash App:  'cash-C_geedk0meh'  → 'C_geedk0meh'  (strip 'cash-' prefix)
+    Square:    'legal_entity_node-AX9UW6J1ZqQtUqTUO;be063a74-...' → 'AX9UW6J1ZqQtUqTUO'
+    Other:      returned as-is
     """
     if not raw:
         return None
     if raw.startswith("legal_entity_node-"):
         token = raw[len("legal_entity_node-"):].split(";")[0].strip()
         return token or None
+    if raw.startswith("cash-"):
+        return raw[len("cash-"):]
     return raw
 
 
