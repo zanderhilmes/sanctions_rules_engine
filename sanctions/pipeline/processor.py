@@ -67,11 +67,13 @@ class SanctionsPipeline:
                 self._snowflake = SnowflakeEnricher(
                     account=sf.account,
                     user=sf.user,
-                    password=sf.password,
                     warehouse=sf.warehouse,
                     database=sf.database,
                     schema=sf.schema_name,
                     table=sf.table,
+                    password=sf.password,
+                    authenticator=sf.authenticator,
+                    token=sf.token,
                 )
             except Exception as exc:
                 log.warning("Snowflake enricher disabled — connection failed: %s", exc)
@@ -302,6 +304,24 @@ def _bridger_dob(raw: Optional[str]) -> Optional[str]:
     return s
 
 
+def _extract_customer_token(raw: Optional[str]) -> Optional[str]:
+    """
+    Normalize a Bridger account_id to a plain customer token.
+
+    Cash App:  'c-abc123...'
+               → 'c-abc123...'  (unchanged — already a customer token)
+
+    Square:    'legal_entity_node-AX9UW6J1ZqQtUqTUO;be063a74-470f-4c26-b9f6-...'
+               → 'AX9UW6J1ZqQtUqTUO'  (part between prefix and semicolon)
+    """
+    if not raw:
+        return None
+    if raw.startswith("legal_entity_node-"):
+        token = raw[len("legal_entity_node-"):].split(";")[0].strip()
+        return token or None
+    return raw
+
+
 def _load_from_bridger_csv(path: str) -> List[Alert]:
     """
     Load and deduplicate a Bridger CSV_Summary_Export.
@@ -355,7 +375,7 @@ def _load_from_bridger_csv(path: str) -> List[Alert]:
 
         alerts.append(Alert(
             alert_id=aid,
-            account_id=_opt(row.get("account_id")),
+            account_id=_extract_customer_token(_opt(row.get("account_id"))),
             customer_name=str(row.get("Name", "")).strip(),
             sdn_name=entity_name,
             match_score=score,

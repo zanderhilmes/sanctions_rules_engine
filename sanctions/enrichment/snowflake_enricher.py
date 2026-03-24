@@ -10,19 +10,7 @@ Fields populated on Alert:
     customer_verified   — True when a successful IDV attempt is on record
 
 --------------------------------------------------------------------------------
-TODOs before enabling
---------------------------------------------------------------------------------
-1.  Confirm the column name that stores the account/user identifier:
-        _ACCOUNT_ID_COL = "ACCOUNT_ID"   ← update if different
-
-2.  Confirm the status column and value that indicates a passed IDV check:
-        _STATUS_COL   = "STATUS"         ← update if different
-        _STATUS_PASS  = "PASSED"         ← update if different
-
-3.  Confirm the timestamp column used to pick the most recent row:
-        _TIMESTAMP_COL = "CREATED_AT"    ← update if different
-
-4.  Set credentials in .env / environment:
+Setup — set credentials in .env / environment:
         SNOWFLAKE_ACCOUNT   e.g. xy12345.us-east-1
         SNOWFLAKE_USER
         SNOWFLAKE_PASSWORD
@@ -41,18 +29,45 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# ── TODO: confirm these column names against the actual table schema ──────────
-_ACCOUNT_ID_COL = "ACCOUNT_ID"
-_STATUS_COL     = "STATUS"
-_STATUS_PASS    = "PASSED"
-_TIMESTAMP_COL  = "CREATED_AT"
-# ─────────────────────────────────────────────────────────────────────────────
+_ACCOUNT_ID_COL = "CUSTOMER_TOKEN"      # joins to alert.account_id (customer token)
+_TIMESTAMP_COL  = "ATTEMPT_OCCURRED_AT" # orders by most recent attempt
 
 try:
     import snowflake.connector
     _SF_AVAILABLE = True
 except ImportError:
     _SF_AVAILABLE = False
+
+
+def _build_dob(
+    year_raw, month_raw, day_raw
+) -> Optional[str]:
+    """
+    Construct a DOB string from Snowflake BIRTH_YEAR / BIRTH_MONTH / BIRTH_DAY.
+    All three fields are TEXT in the table.
+
+    Returns 'YYYY-MM-DD' when all components are present and valid,
+    'YYYY' when only the year is available, or None.
+    """
+    year: Optional[int] = None
+    try:
+        year = int(year_raw) if year_raw not in (None, "", "None") else None
+    except (ValueError, TypeError):
+        pass
+
+    if year is None:
+        return None
+
+    try:
+        month = int(month_raw) if month_raw not in (None, "", "None") else None
+        day   = int(day_raw)   if day_raw   not in (None, "", "None") else None
+        if month and day:
+            from datetime import date as _date
+            return _date(year, month, day).isoformat()
+    except (ValueError, TypeError):
+        pass
+
+    return str(year)
 
 
 class SnowflakeEnricher:
@@ -65,11 +80,13 @@ class SnowflakeEnricher:
         self,
         account: str,
         user: str,
-        password: str,
         warehouse: str,
         database: str = "APP_CASH",
         schema: str = "HEALTH",
         table: str = "IDENTITY_IDV_ATTEMPTS",
+        password: str = "",
+        authenticator: str = "snowflake",
+        token: str = "",
         timeout_seconds: int = 10,
     ) -> None:
         if not _SF_AVAILABLE:
@@ -79,17 +96,24 @@ class SnowflakeEnricher:
             )
         self._table = f"{database}.{schema}.{table}"
         self._timeout = timeout_seconds
-        self._conn = snowflake.connector.connect(
+
+        connect_kwargs: dict = dict(
             account=account,
             user=user,
-            password=password,
             warehouse=warehouse,
             database=database,
             schema=schema,
+            authenticator=authenticator,
             login_timeout=timeout_seconds,
             network_timeout=timeout_seconds,
         )
-        log.info("[snowflake] Connected to %s", self._table)
+        if authenticator == "oauth" and token:
+            connect_kwargs["token"] = token
+        elif authenticator not in ("externalbrowser",) and password:
+            connect_kwargs["password"] = password
+
+        self._conn = snowflake.connector.connect(**connect_kwargs)
+        log.info("[snowflake] Connected to %s (authenticator=%s)", self._table, authenticator)
 
     def enrich(self, alert) -> None:
         """Mutates alert in-place. Never raises."""
@@ -97,13 +121,13 @@ class SnowflakeEnricher:
             log.debug("[snowflake] Alert %s has no account_id — skipping", alert.alert_id)
             return
 
-        birth_year, verified = self._lookup(alert.account_id)
+        dob, verified = self._lookup(alert.account_id)
 
-        if birth_year is not None and not alert.customer_dob:
-            alert.customer_dob = str(birth_year)
+        if dob is not None and not alert.customer_dob:
+            alert.customer_dob = dob
             log.info(
                 "[snowflake] Alert %s: backfilled customer_dob=%s from IDV record",
-                alert.alert_id, alert.customer_dob,
+                alert.alert_id, dob,
             )
 
         if verified and not alert.customer_verified:
@@ -115,11 +139,12 @@ class SnowflakeEnricher:
 
     def _lookup(self, account_id: str):
         """
-        Returns (birth_year, is_verified) for the most recent IDV record.
+        Returns (dob_string, is_verified) for the most recent IDV record.
+        dob_string is 'YYYY-MM-DD' when day/month are available, else 'YYYY'.
         Returns (None, False) on miss or error.
         """
         query = f"""
-            SELECT BIRTH_YEAR, {_STATUS_COL}
+            SELECT BIRTH_YEAR, BIRTH_MONTH, BIRTH_DAY, ATTEMPT_SUCCESSFUL
             FROM {self._table}
             WHERE {_ACCOUNT_ID_COL} = %s
             ORDER BY {_TIMESTAMP_COL} DESC
@@ -135,18 +160,13 @@ class SnowflakeEnricher:
             return None, False
 
         if row is None:
-            log.debug("[snowflake] No IDV record found for account_id=%s", account_id)
+            log.debug("[snowflake] No IDV record found for customer_token=%s", account_id)
             return None, False
 
-        birth_year_raw, status = row
-        birth_year: Optional[int] = None
-        try:
-            birth_year = int(birth_year_raw) if birth_year_raw is not None else None
-        except (ValueError, TypeError):
-            pass
-
-        is_verified = isinstance(status, str) and status.upper() == _STATUS_PASS.upper()
-        return birth_year, is_verified
+        birth_year_raw, birth_month_raw, birth_day_raw, attempt_successful = row
+        dob = _build_dob(birth_year_raw, birth_month_raw, birth_day_raw)
+        is_verified = bool(attempt_successful)
+        return dob, is_verified
 
     def close(self) -> None:
         try:
