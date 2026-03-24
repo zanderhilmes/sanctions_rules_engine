@@ -203,7 +203,7 @@ def load_alerts(path: str) -> List[Alert]:
     with open(path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                if "Alert ID" in line and "List Screening Score" in line:
+                if "Alert ID" in line and ("List Screening Score" in line or "Screening List Score" in line):
                     return _load_from_bridger_csv(path)
                 break
     return _load_from_csv(path)
@@ -362,7 +362,7 @@ def _load_from_bridger_csv(path: str) -> List[Alert]:
     alerts: List[Alert] = []
     for aid, row in seen.items():
         try:
-            score = float(str(row.get("List Screening Score", "0")).strip())
+            score = float(str(row.get("List Screening Score") or row.get("Screening List Score") or "0").strip())
         except (ValueError, TypeError):
             score = 0.0
 
