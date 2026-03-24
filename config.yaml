@@ -31,6 +31,20 @@ snowflake:
   # For headless/automated use, try: "https://login.block.xyz"
   password: "${SNOWFLAKE_PASSWORD}"
   token: "${SNOWFLAKE_TOKEN}"
+  # Account creation date — fill in table name to enable (leave blank to skip)
+  # account_table: "APP_CASH.CORE.SELLERS"    # TODO: find the right table
+  # account_id_col: "CUSTOMER_TOKEN"
+  # account_created_col: "CREATED_AT"
+
+# TLOxp (LexisNexis) — fills customer_dob and customer_state from public records
+# Activate once credentials are provisioned:
+#   1. Set TLOXP_API_KEY and TLOXP_API_URL in .env
+#   2. Fill in _SEARCH_ENDPOINT and _parse_response() in tlo_client.py
+#   3. Set enabled: true below
+tlo:
+  enabled: false
+  api_key: "${TLOXP_API_KEY}"
+  api_url: "${TLOXP_API_URL}"
 
 # NOTE: Option 1 (preferred) — fix ERF_DOB in Bridger export settings so that
 # the SDN DOB is populated directly in the Bridger CSV.  Disable this enricher

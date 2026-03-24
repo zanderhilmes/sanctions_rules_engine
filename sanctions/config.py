@@ -40,6 +40,7 @@ class RulesConfig(BaseModel):
     low_score_clear_threshold: float = 30.0
     common_names_file: str = "data/common_names.txt"
     age_improbability_max_years: int = 5
+    min_signup_age: int = 18    # Minimum age at account creation (used when customer_dob absent)
 
 
 class SnowflakeConfig(BaseModel):
@@ -53,6 +54,18 @@ class SnowflakeConfig(BaseModel):
     table: str = "IDENTITY_IDV_ATTEMPTS"
     authenticator: str = "snowflake"  # "snowflake" | "externalbrowser" | "oauth" | Okta URL
     token: str = ""             # OAuth token (only used when authenticator=oauth)
+    # Account creation date lookup (optional — leave account_table blank to skip)
+    account_table: str = ""          # e.g. APP_CASH.CORE.SELLERS — fully qualified
+    account_id_col: str = "CUSTOMER_TOKEN"
+    account_created_col: str = "CREATED_AT"
+
+
+class TLOConfig(BaseModel):
+    enabled: bool = False
+    api_key: str = ""           # set via TLOXP_API_KEY env var
+    api_url: str = ""           # set via TLOXP_API_URL env var
+    timeout_seconds: int = 10
+    max_retries: int = 2
 
 
 class OFACConfig(BaseModel):
@@ -75,6 +88,7 @@ class AppConfig(BaseModel):
     llm: LLMConfig = LLMConfig()
     rules: RulesConfig = RulesConfig()
     snowflake: SnowflakeConfig = SnowflakeConfig()
+    tlo: TLOConfig = TLOConfig()
     ofac: OFACConfig = OFACConfig()
     output: OutputConfig = OutputConfig()
 

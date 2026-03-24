@@ -15,6 +15,7 @@ import pandas as pd
 from sanctions.config import AppConfig
 from sanctions.enrichment.ofac_enricher import OFACEnricher
 from sanctions.enrichment.snowflake_enricher import SnowflakeEnricher
+from sanctions.enrichment.tlo_client import TLOxpClient, TLOxpEnricher
 from sanctions.llm.claude_client import ClaudeClient
 from sanctions.models import Alert, AuditRecord, Decision, Disposition
 from sanctions.rules.registry import RuleRegistry
@@ -54,7 +55,8 @@ class SanctionsPipeline:
         self.registry.register(DOBMismatchRule())
         self.registry.register(
             AgeImprobabilityRule(
-                age_improbability_max_years=config.rules.age_improbability_max_years
+                age_improbability_max_years=config.rules.age_improbability_max_years,
+                min_signup_age=config.rules.min_signup_age,
             )
         )
         self.registry.register(LowScoreRule(threshold=config.rules.low_score_clear_threshold))
@@ -75,11 +77,32 @@ class SanctionsPipeline:
                     password=sf.password,
                     authenticator=sf.authenticator,
                     token=sf.token,
+                    account_table=sf.account_table,
+                    account_id_col=sf.account_id_col,
+                    account_created_col=sf.account_created_col,
                 )
             except Exception as exc:
                 log.warning("Snowflake enricher disabled — connection failed: %s", exc)
         elif sf.enabled:
             log.warning("Snowflake enabled in config but credentials not set — skipping")
+
+        self._tlo: Optional[TLOxpEnricher] = None
+        tlo = config.tlo
+        if tlo.enabled and tlo.api_key and not tlo.api_key.startswith("${") \
+                and tlo.api_url and not tlo.api_url.startswith("${"):
+            try:
+                client = TLOxpClient(
+                    api_key=tlo.api_key,
+                    api_url=tlo.api_url,
+                    timeout_seconds=tlo.timeout_seconds,
+                    max_retries=tlo.max_retries,
+                )
+                self._tlo = TLOxpEnricher(client)
+                log.info("TLOxp enricher enabled (url=%s)", tlo.api_url)
+            except Exception as exc:
+                log.warning("TLOxp enricher disabled — init failed: %s", exc)
+        elif tlo.enabled:
+            log.warning("TLOxp enabled in config but credentials not set — skipping")
 
         self._ofac: Optional[OFACEnricher] = None
         if config.ofac.enabled:
@@ -109,12 +132,17 @@ class SanctionsPipeline:
             )
 
     def _process_alert(self, alert: Alert) -> AuditRecord:
-        # Snowflake enrichment — backfills customer_dob and customer_verified
+        # Snowflake enrichment — backfills customer_dob, customer_verified, account_created_at
         if self._snowflake is not None:
             self._snowflake.enrich(alert)
 
+        # OFAC XML enrichment — backfills sdn_dob and sdn_date_added
         if self._ofac is not None:
             self._ofac.enrich(alert)
+
+        # TLOxp enrichment — backfills customer_dob and customer_state when missing
+        if self._tlo is not None:
+            self._tlo.enrich(alert)
 
         # Derive state from zip if enrichment didn't supply it
         if not alert.customer_state:

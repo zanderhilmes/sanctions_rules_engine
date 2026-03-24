@@ -42,6 +42,9 @@ class Alert(BaseModel):
     prior_sanctions_denylist: bool = False  # Customer was previously denylisted for sanctions
     notary_hit: Optional[bool] = None       # True/False/None = hit / not found / not queried
 
+    # Populated by SnowflakeEnricher (account creation date lookup)
+    account_created_at: Optional[str] = None  # "YYYY-MM-DD" — used by AgeImprobabilityRule
+
     # Populated by TLOxpEnricher (when enabled)
     tlo_dob: Optional[str] = None           # DOB returned by TLOxp
     tlo_state: Optional[str] = None         # State confirmed by TLOxp

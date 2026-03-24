@@ -118,6 +118,10 @@ class OFACEnricher:
         timeout_seconds: int = 30,
     ) -> None:
         self._index: Dict[FrozenSet[str], List[str]] = {}
+        # profile_id → "YYYY-MM-DD" entry date (for sdn_date_added backfill)
+        self._date_added: Dict[str, str] = {}
+        # name tokens → profile_ids (used to resolve date_added via name lookup)
+        self._name_to_profile: Dict[FrozenSet[str], List[str]] = {}
         xml_data = self._get_xml(xml_url, cache_path, max_age_hours, timeout_seconds)
         self._build_index(xml_data)
 
@@ -148,12 +152,42 @@ class OFACEnricher:
 
     def _build_index(self, xml_data: bytes) -> None:
         """
-        Parse sdn_advanced.xml and build a name-token → DOB index.
+        Parse sdn_advanced.xml and build:
+          _index           : name tokens → DOB list  (for sdn_dob backfill)
+          _name_to_profile : name tokens → profile IDs
+          _date_added      : profile ID  → entry date (for sdn_date_added backfill)
 
         Only indexes Individual entries (those with First/Last Name parts).
-        Aliases sharing the same entry DOB are indexed under each alias name.
         """
         root = ET.fromstring(xml_data)
+
+        # ---- Build profile_id → entry date from SanctionsEntries ----
+        entries_el = root.find(_q("SanctionsEntries"))
+        if entries_el is not None:
+            for entry in entries_el:
+                profile_id = entry.get("ProfileID")
+                if not profile_id:
+                    continue
+                ee = entry.find(_q("EntryEvent"))
+                if ee is None:
+                    continue
+                date_el = ee.find(_q("Date"))
+                if date_el is None:
+                    continue
+                year = _text(date_el, "Year")
+                month = _text(date_el, "Month")
+                day = _text(date_el, "Day")
+                if year:
+                    try:
+                        if month and day:
+                            from datetime import date as _date
+                            d = _date(int(year), int(month), int(day))
+                            self._date_added[profile_id] = d.isoformat()
+                        else:
+                            self._date_added[profile_id] = year
+                    except ValueError:
+                        self._date_added[profile_id] = year
+
         parties_el = root.find(_q("DistinctParties"))
         if parties_el is None:
             log.warning("[ofac] No DistinctParties element found in XML")
@@ -198,7 +232,9 @@ class OFACEnricher:
                 if not any(t in _INDIVIDUAL_NAME_TYPES for t in group_type.values()):
                     continue
 
-                # ---- Index each alias's name tokens → DOBs ----
+                profile_id = profile.get("ID", "")
+
+                # ---- Index each alias's name tokens → DOBs and profile IDs ----
                 for alias in identity.findall(_q("Alias")):
                     for doc_name in alias.findall(_q("DocumentedName")):
                         parts: List[str] = []
@@ -208,7 +244,6 @@ class OFACEnricher:
                                 continue
                             gid = npv.get("NamePartGroupID", "")
                             ntype = group_type.get(gid, "")
-                            # Only include individual name part types
                             if ntype in _INDIVIDUAL_NAME_TYPES:
                                 parts.append(npv.text.strip())
 
@@ -217,6 +252,8 @@ class OFACEnricher:
                         tokens = _tokenize_name(" ".join(parts))
                         if tokens:
                             self._index.setdefault(tokens, []).extend(dobs)
+                            if profile_id:
+                                self._name_to_profile.setdefault(tokens, []).append(profile_id)
 
                 individuals_with_dob += 1
 
@@ -233,8 +270,6 @@ class OFACEnricher:
             log.warning("[ofac] Enrichment error for alert %s: %s", alert.alert_id, exc)
 
     def _enrich(self, alert) -> None:
-        if alert.sdn_dob:
-            return  # Already populated (e.g. from Bridger ERF_DOB)
         if not alert.sdn_name:
             return
 
@@ -242,22 +277,35 @@ class OFACEnricher:
         if not tokens:
             return
 
-        matches = self._index.get(tokens)
-        if not matches:
-            log.debug("[ofac] No DOB found for SDN '%s'", alert.sdn_name)
-            return
+        # ---- Backfill sdn_dob ----
+        if not alert.sdn_dob:
+            matches = self._index.get(tokens)
+            if matches:
+                unique_dobs = list(dict.fromkeys(matches))
+                if len(unique_dobs) == 1:
+                    alert.sdn_dob = unique_dobs[0]
+                    log.info(
+                        "[ofac] Alert %s: backfilled sdn_dob=%s for SDN '%s'",
+                        alert.alert_id, alert.sdn_dob, alert.sdn_name,
+                    )
+                else:
+                    log.debug(
+                        "[ofac] Alert %s: multiple DOBs %s for SDN '%s' — skipping (ambiguous)",
+                        alert.alert_id, unique_dobs, alert.sdn_name,
+                    )
+            else:
+                log.debug("[ofac] No DOB found for SDN '%s'", alert.sdn_name)
 
-        # Deduplicate while preserving insertion order
-        unique_dobs = list(dict.fromkeys(matches))
-
-        if len(unique_dobs) == 1:
-            alert.sdn_dob = unique_dobs[0]
-            log.info(
-                "[ofac] Alert %s: backfilled sdn_dob=%s for SDN '%s'",
-                alert.alert_id, alert.sdn_dob, alert.sdn_name,
-            )
-        else:
-            log.debug(
-                "[ofac] Alert %s: multiple DOBs %s for SDN '%s' — skipping (ambiguous)",
-                alert.alert_id, unique_dobs, alert.sdn_name,
-            )
+        # ---- Backfill sdn_date_added ----
+        if not alert.sdn_date_added:
+            profile_ids = self._name_to_profile.get(tokens)
+            if profile_ids:
+                unique_ids = list(dict.fromkeys(profile_ids))
+                if len(unique_ids) == 1:
+                    date_added = self._date_added.get(unique_ids[0])
+                    if date_added:
+                        alert.sdn_date_added = date_added
+                        log.info(
+                            "[ofac] Alert %s: backfilled sdn_date_added=%s for SDN '%s'",
+                            alert.alert_id, date_added, alert.sdn_name,
+                        )

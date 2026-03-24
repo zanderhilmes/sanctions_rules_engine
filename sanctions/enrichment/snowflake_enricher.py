@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 _ACCOUNT_ID_COL = "CUSTOMER_TOKEN"      # joins to alert.account_id (customer token)
 _TIMESTAMP_COL  = "ATTEMPT_OCCURRED_AT" # orders by most recent attempt
+_DEFAULT_ACCOUNT_ID_COL = "CUSTOMER_TOKEN"
 
 try:
     import snowflake.connector
@@ -88,6 +89,9 @@ class SnowflakeEnricher:
         authenticator: str = "snowflake",
         token: str = "",
         timeout_seconds: int = 10,
+        account_table: str = "",
+        account_id_col: str = "CUSTOMER_TOKEN",
+        account_created_col: str = "CREATED_AT",
     ) -> None:
         if not _SF_AVAILABLE:
             raise RuntimeError(
@@ -96,6 +100,9 @@ class SnowflakeEnricher:
             )
         self._table = f"{database}.{schema}.{table}"
         self._timeout = timeout_seconds
+        self._account_table = account_table or ""
+        self._account_id_col = account_id_col
+        self._account_created_col = account_created_col
 
         connect_kwargs: dict = dict(
             account=account,
@@ -142,6 +149,16 @@ class SnowflakeEnricher:
                 alert.alert_id,
             )
 
+        # Account creation date — only when table is configured
+        if self._account_table and not getattr(alert, "account_created_at", None):
+            created_at = self._lookup_account_created(alert.account_id)
+            if created_at:
+                alert.account_created_at = created_at
+                log.info(
+                    "[snowflake] Alert %s: backfilled account_created_at=%s",
+                    alert.alert_id, created_at,
+                )
+
     def _lookup(self, account_id: str):
         """
         Returns (dob_string, is_verified) for the most recent IDV record.
@@ -172,6 +189,43 @@ class SnowflakeEnricher:
         dob = _build_dob(birth_year_raw, birth_month_raw, birth_day_raw)
         is_verified = bool(attempt_successful)
         return dob, is_verified
+
+    def _lookup_account_created(self, account_id: str) -> Optional[str]:
+        """
+        Return the account creation date as 'YYYY-MM-DD', or None on miss/error.
+
+        Configure via snowflake.account_table in config.yaml, e.g.:
+            account_table: "APP_CASH.CORE.SELLERS"
+            account_id_col: "CUSTOMER_TOKEN"
+            account_created_col: "CREATED_AT"
+        """
+        query = f"""
+            SELECT {self._account_created_col}
+            FROM {self._account_table}
+            WHERE {self._account_id_col} = %s
+            LIMIT 1
+        """
+        try:
+            cur = self._conn.cursor()
+            cur.execute(query, (account_id,))
+            row = cur.fetchone()
+            cur.close()
+        except Exception as exc:
+            log.warning("[snowflake] Account creation lookup failed for %s: %s", account_id, exc)
+            return None
+
+        if row is None or row[0] is None:
+            return None
+
+        created = row[0]
+        # Snowflake may return a datetime object or a string
+        try:
+            from datetime import date as _date, datetime as _dt
+            if isinstance(created, (_date, _dt)):
+                return created.strftime("%Y-%m-%d")
+            return str(created)[:10]  # Trim timestamp to date
+        except Exception:
+            return str(created)[:10]
 
     def close(self) -> None:
         try:
