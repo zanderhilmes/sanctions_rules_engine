@@ -31,10 +31,10 @@ snowflake:
   # For headless/automated use, try: "https://login.block.xyz"
   password: "${SNOWFLAKE_PASSWORD}"
   token: "${SNOWFLAKE_TOKEN}"
-  # Account creation date — fill in table name to enable (leave blank to skip)
-  # account_table: "APP_CASH.CORE.SELLERS"    # TODO: find the right table
-  # account_id_col: "CUSTOMER_TOKEN"
-  # account_created_col: "CREATED_AT"
+  # Account creation date — used by age improbability rule when customer_dob is absent
+  account_table: "APP_CASH.APP.CASH_CUSTOMER_IDENTITY_W_AFTERPAY"
+  account_id_col: "CUSTOMER_TOKEN"
+  account_created_col: "CUSTOMER_CREATED_AT"
 
 # TLOxp (LexisNexis) — fills customer_dob and customer_state from public records
 # Activate once credentials are provisioned:
