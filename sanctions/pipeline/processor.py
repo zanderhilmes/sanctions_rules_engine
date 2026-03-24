@@ -13,6 +13,7 @@ from typing import List, Optional
 import pandas as pd
 
 from sanctions.config import AppConfig
+from sanctions.enrichment.ofac_enricher import OFACEnricher
 from sanctions.enrichment.snowflake_enricher import SnowflakeEnricher
 from sanctions.llm.claude_client import ClaudeClient
 from sanctions.models import Alert, AuditRecord, Decision, Disposition
@@ -80,6 +81,18 @@ class SanctionsPipeline:
         elif sf.enabled:
             log.warning("Snowflake enabled in config but credentials not set — skipping")
 
+        self._ofac: Optional[OFACEnricher] = None
+        if config.ofac.enabled:
+            try:
+                self._ofac = OFACEnricher(
+                    xml_url=config.ofac.xml_url,
+                    cache_path=config.ofac.cache_path,
+                    max_age_hours=config.ofac.max_age_hours,
+                    timeout_seconds=config.ofac.timeout_seconds,
+                )
+            except Exception as exc:
+                log.warning("OFAC enricher disabled — init failed: %s", exc)
+
         self._llm: Optional[ClaudeClient] = None
         if config.api_key and not config.api_key.startswith("${"):
             self._llm = ClaudeClient(
@@ -99,6 +112,9 @@ class SanctionsPipeline:
         # Snowflake enrichment — backfills customer_dob and customer_verified
         if self._snowflake is not None:
             self._snowflake.enrich(alert)
+
+        if self._ofac is not None:
+            self._ofac.enrich(alert)
 
         # Derive state from zip if enrichment didn't supply it
         if not alert.customer_state:

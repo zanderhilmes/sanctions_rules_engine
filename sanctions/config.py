@@ -55,6 +55,16 @@ class SnowflakeConfig(BaseModel):
     token: str = ""             # OAuth token (only used when authenticator=oauth)
 
 
+class OFACConfig(BaseModel):
+    # NOTE: Option 1 (preferred) — fix ERF_DOB in Bridger export settings.
+    # Disable this enricher (enabled: false) once Bridger populates ERF_DOB.
+    enabled: bool = False
+    xml_url: str = "https://www.treasury.gov/ofac/downloads/sanctions/1.0/sdn_advanced.xml"
+    cache_path: str = "data/sdn_advanced.xml"
+    max_age_hours: int = 24
+    timeout_seconds: int = 30
+
+
 class OutputConfig(BaseModel):
     csv_path: str = "output/audit_trail.csv"
     json_path: str = "output/audit_trail.json"
@@ -65,6 +75,7 @@ class AppConfig(BaseModel):
     llm: LLMConfig = LLMConfig()
     rules: RulesConfig = RulesConfig()
     snowflake: SnowflakeConfig = SnowflakeConfig()
+    ofac: OFACConfig = OFACConfig()
     output: OutputConfig = OutputConfig()
 
 

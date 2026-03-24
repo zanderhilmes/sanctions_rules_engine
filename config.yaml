@@ -32,6 +32,14 @@ snowflake:
   password: "${SNOWFLAKE_PASSWORD}"
   token: "${SNOWFLAKE_TOKEN}"
 
+# NOTE: Option 1 (preferred) — fix ERF_DOB in Bridger export settings so that
+# the SDN DOB is populated directly in the Bridger CSV.  Disable this enricher
+# (enabled: false) once Bridger populates ERF_DOB.
+ofac:
+  enabled: true
+  cache_path: "data/sdn_advanced.xml"
+  max_age_hours: 24
+
 output:
   csv_path: "output/audit_trail.csv"
   json_path: "output/audit_trail.json"
