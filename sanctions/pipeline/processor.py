@@ -375,7 +375,7 @@ def _load_from_bridger_csv(path: str) -> List[Alert]:
 
         alerts.append(Alert(
             alert_id=aid,
-            account_id=_extract_customer_token(_opt(row.get("account_id"))),
+            account_id=_extract_customer_token(_opt(row.get("Account ID"))),
             customer_name=str(row.get("Name", "")).strip(),
             sdn_name=entity_name,
             match_score=score,

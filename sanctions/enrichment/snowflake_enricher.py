@@ -113,6 +113,11 @@ class SnowflakeEnricher:
             connect_kwargs["password"] = password
 
         self._conn = snowflake.connector.connect(**connect_kwargs)
+        # Explicitly activate the warehouse — browser-based auth doesn't always inherit it
+        if warehouse:
+            cur = self._conn.cursor()
+            cur.execute(f"USE WAREHOUSE {warehouse}")
+            cur.close()
         log.info("[snowflake] Connected to %s (authenticator=%s)", self._table, authenticator)
 
     def enrich(self, alert) -> None:
