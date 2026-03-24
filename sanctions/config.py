@@ -44,13 +44,15 @@ class RulesConfig(BaseModel):
 
 class SnowflakeConfig(BaseModel):
     enabled: bool = False
-    account: str = ""       # e.g. xy12345.us-east-1
+    account: str = ""           # e.g. xy12345.us-east-1
     user: str = ""
-    password: str = ""
+    password: str = ""          # leave blank when using SSO/OAuth
     warehouse: str = ""
     database: str = "APP_CASH"
     schema_name: str = "HEALTH"
     table: str = "IDENTITY_IDV_ATTEMPTS"
+    authenticator: str = "snowflake"  # "snowflake" | "externalbrowser" | "oauth" | Okta URL
+    token: str = ""             # OAuth token (only used when authenticator=oauth)
 
 
 class OutputConfig(BaseModel):
