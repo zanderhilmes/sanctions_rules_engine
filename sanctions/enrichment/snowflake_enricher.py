@@ -1,12 +1,14 @@
 """
 SnowflakeEnricher — backfills customer DOB and verification status from
-APP_CASH.HEALTH.IDENTITY_IDV_ATTEMPTS before the rule engine runs.
+Snowflake before the rule engine runs.
 
-Lookup: alert.account_id → ACCOUNT_ID column (see _ACCOUNT_ID_COL below).
+DOB lookup order (first hit wins):
+  1. APP_CASH.HEALTH.IDENTITY_DOB_HISTORY  — most reliable; has full DOB DATE column
+     (the source that populates CASH_W_DOB on CASH_CUSTOMER_IDENTITY_W_AFTERPAY)
+  2. APP_CASH.HEALTH.IDENTITY_IDV_ATTEMPTS — fallback; only present after IDV completion
 
 Fields populated on Alert:
-    customer_dob        — BIRTH_YEAR as a year-only string e.g. "1988"
-                          enables DOB mismatch rule (F+ 1B)
+    customer_dob        — 'YYYY-MM-DD' or 'YYYY' string; enables DOB mismatch rule (F+ 1B)
     customer_verified   — True when a successful IDV attempt is on record
 
 --------------------------------------------------------------------------------
@@ -92,6 +94,7 @@ class SnowflakeEnricher:
         account_table: str = "",
         account_id_col: str = "CUSTOMER_TOKEN",
         account_created_col: str = "CREATED_AT",
+        dob_history_table: str = "APP_CASH.HEALTH.IDENTITY_DOB_HISTORY",
     ) -> None:
         if not _SF_AVAILABLE:
             raise RuntimeError(
@@ -103,6 +106,7 @@ class SnowflakeEnricher:
         self._account_table = account_table or ""
         self._account_id_col = account_id_col
         self._account_created_col = account_created_col
+        self._dob_history_table = dob_history_table or ""
 
         connect_kwargs: dict = dict(
             account=account,
@@ -133,6 +137,17 @@ class SnowflakeEnricher:
             log.debug("[snowflake] Alert %s has no account_id — skipping", alert.alert_id)
             return
 
+        # ---- DOB from IDENTITY_DOB_HISTORY (primary source) ----
+        if self._dob_history_table and not alert.customer_dob:
+            dob = self._lookup_dob_history(alert.account_id)
+            if dob is not None:
+                alert.customer_dob = dob
+                log.info(
+                    "[snowflake] Alert %s: backfilled customer_dob=%s from DOB history",
+                    alert.alert_id, dob,
+                )
+
+        # ---- DOB + verified from IDENTITY_IDV_ATTEMPTS (fallback) ----
         dob, verified = self._lookup(alert.account_id)
 
         if dob is not None and not alert.customer_dob:
@@ -189,6 +204,51 @@ class SnowflakeEnricher:
         dob = _build_dob(birth_year_raw, birth_month_raw, birth_day_raw)
         is_verified = bool(attempt_successful)
         return dob, is_verified
+
+    def _lookup_dob_history(self, account_id: str) -> Optional[str]:
+        """
+        Return customer DOB from IDENTITY_DOB_HISTORY — the table that backs
+        CASH_W_DOB on CASH_CUSTOMER_IDENTITY_W_AFTERPAY.
+
+        Prefers the DOB DATE column (full date); falls back to BIRTH_YEAR/MONTH/DAY
+        text columns if DOB is NULL.  Returns 'YYYY-MM-DD' or 'YYYY', or None.
+        """
+        query = (
+            "SELECT DOB, BIRTH_YEAR, BIRTH_MONTH, BIRTH_DAY "
+            "FROM " + self._dob_history_table + " "
+            "WHERE CUSTOMER_TOKEN = %s "
+            "ORDER BY START_TIME DESC "
+            "LIMIT 1"
+        )
+        try:
+            cur = self._conn.cursor()
+            cur.execute(query, (account_id,))
+            row = cur.fetchone()
+            cur.close()
+        except Exception as exc:
+            log.warning("[snowflake] DOB history lookup failed for %s: %s", account_id, exc)
+            return None
+
+        if row is None:
+            log.debug("[snowflake] No DOB history record for customer_token=%s", account_id)
+            return None
+
+        dob_raw, birth_year_raw, birth_month_raw, birth_day_raw = row
+
+        # DOB column is a DATE — Snowflake returns it as a Python date object
+        if dob_raw is not None:
+            try:
+                from datetime import date as _date, datetime as _dt
+                if isinstance(dob_raw, (_date, _dt)):
+                    return dob_raw.strftime("%Y-%m-%d")
+                s = str(dob_raw)[:10]
+                if len(s) == 10:
+                    return s
+            except Exception:
+                pass
+
+        # Fallback to text columns
+        return _build_dob(birth_year_raw, birth_month_raw, birth_day_raw)
 
     def _lookup_account_created(self, account_id: str) -> Optional[str]:
         """

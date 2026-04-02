@@ -58,6 +58,8 @@ class SnowflakeConfig(BaseModel):
     account_table: str = ""          # e.g. APP_CASH.CORE.SELLERS — fully qualified
     account_id_col: str = "CUSTOMER_TOKEN"
     account_created_col: str = "CREATED_AT"
+    # DOB history table — richer source than IDV attempts (has full DOB date column)
+    dob_history_table: str = "APP_CASH.HEALTH.IDENTITY_DOB_HISTORY"
 
 
 class TLOConfig(BaseModel):

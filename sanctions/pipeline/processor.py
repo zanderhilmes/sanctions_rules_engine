@@ -80,6 +80,7 @@ class SanctionsPipeline:
                     account_table=sf.account_table,
                     account_id_col=sf.account_id_col,
                     account_created_col=sf.account_created_col,
+                    dob_history_table=sf.dob_history_table,
                 )
             except Exception as exc:
                 log.warning("Snowflake enricher disabled — connection failed: %s", exc)
