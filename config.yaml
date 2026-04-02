@@ -38,7 +38,7 @@ snowflake:
   account_id_col: "CUSTOMER_TOKEN"
   account_created_col: "CUSTOMER_CREATED_AT"
 
-# TLOxp (LexisNexis) — fills customer_dob and customer_state from public records
+# TLOxp — fills customer_dob and customer_state from public records
 # Activate once credentials are provisioned:
 #   1. Set TLOXP_API_KEY and TLOXP_API_URL in .env
 #   2. Fill in _SEARCH_ENDPOINT and _parse_response() in tlo_client.py

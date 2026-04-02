@@ -1,9 +1,9 @@
 """
 TLOxp enrichment client.
 
-TLOxp (LexisNexis Risk Solutions) is an identity-verification and
-people-search platform used to look up customer DOB, address, and name
-variants when that information is missing from the screening alert.
+TLOxp is an identity-verification and people-search platform used to
+look up customer DOB, address, and name variants when that information
+is missing from the screening alert.
 
 Pipeline role:
     SnowflakeEnricher → OFACEnricher → TLOxpEnricher → RuleRegistry
@@ -19,11 +19,10 @@ What it populates on Alert (when a record is found):
 --------------------------------------------------------------------------------
 INTEGRATION NOTES — fill in before enabling
 --------------------------------------------------------------------------------
-TLOxp uses a REST/JSON API provisioned by your LexisNexis account rep.
-You will need:
+TLOxp uses a REST/JSON API. You will need:
   1. api_key  — your TLOxp API key (set via TLOXP_API_KEY env var)
   2. api_url  — base URL from your contract, e.g.
-                "https://api.tlo.com/v3"  (verify with LexisNexis)
+                "https://api.tlo.com/v3"
 
 Typical search endpoint:
     POST {api_url}/search/person
@@ -62,7 +61,7 @@ import requests
 
 log = logging.getLogger(__name__)
 
-# ── TODO: update to match your LexisNexis contract ───────────────────────────
+# ── TODO: update to match your TLOxp contract ────────────────────────────────
 _SEARCH_ENDPOINT = "/search/person"   # relative to api_url
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -163,9 +162,8 @@ class TLOxpClient:
         Parse the TLOxp JSON response into a TLOResult.
 
         ── TODO: update field paths to match your contract schema ──────────────
-        The field names below match a common LexisNexis REST shape.
-        Your contract may differ — check the API reference your account rep
-        provides and update the key names accordingly.
+        Check the API reference from your TLOxp account rep and update
+        the key names accordingly.
         ────────────────────────────────────────────────────────────────────────
         """
         records = data.get("records") or data.get("results") or []

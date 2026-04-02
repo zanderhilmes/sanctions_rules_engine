@@ -26,7 +26,7 @@ SanctionsPipeline
     │
     ├── SnowflakeEnricher   (customer DOB, IDV status, account creation date)
     ├── OFACEnricher        (SDN DOB + date-added from sdn_advanced.xml)
-    └── TLOxpEnricher       (customer DOB + state from LexisNexis — stub)
+    └── TLOxpEnricher       (customer DOB + state from TLOxp — stub, no API key yet)
     │
     ├── RuleRegistry        (weighted-vote engine, runs all rules)
     │
@@ -83,7 +83,7 @@ Customer DOB is the most powerful signal (enables DOB mismatch hard-clear). The 
 
 1. **`IDENTITY_DOB_HISTORY`** — primary source; the table that backs `CASH_W_DOB`. Has a full `DOB DATE` column.
 2. **`IDENTITY_IDV_ATTEMPTS`** — fallback; only present for customers who completed IDV.
-3. **TLOxp (LexisNexis)** — stub; activated once credentials are provisioned.
+3. **TLOxp** — stub; activated once an API key is provisioned.
 4. **Account creation date proxy** — when no DOB is available, `AgeImprobabilityRule` derives the latest possible birth year from `CUSTOMER_CREATED_AT` minus the minimum signup age (18). Only fires the age rule; does not populate `customer_dob`.
 
 ### SDN DOB + date-added
@@ -219,9 +219,9 @@ self.registry.register(MyRule())
 
 ---
 
-## TLOxp setup (LexisNexis)
+## TLOxp setup
 
-Once credentials are provisioned:
+TLOxp access requires an API key that has not yet been provisioned. Once available:
 
 1. Set `TLOXP_API_KEY` and `TLOXP_API_URL` in `.env`
 2. Fill in the two TODOs in `sanctions/enrichment/tlo_client.py`:
