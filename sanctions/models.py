@@ -73,6 +73,7 @@ class Disposition(BaseModel):
 class AuditRecord(BaseModel):
     """Flattened record written to audit trail CSV/JSON."""
     alert_id: str
+    account_id: Optional[str] = None
     customer_name: str
     sdn_name: str
     match_score: float
@@ -102,6 +103,7 @@ class AuditRecord(BaseModel):
         ]
         return cls(
             alert_id=alert.alert_id,
+            account_id=alert.account_id,
             customer_name=alert.customer_name,
             sdn_name=alert.sdn_name,
             match_score=alert.match_score,

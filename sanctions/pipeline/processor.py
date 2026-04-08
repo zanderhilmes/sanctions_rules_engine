@@ -32,7 +32,7 @@ from sanctions.utils import zip_to_state
 log = logging.getLogger(__name__)
 
 _AUDIT_FIELDNAMES = [
-    "alert_id", "customer_name", "sdn_name", "match_score", "zip_code",
+    "alert_id", "account_id", "customer_name", "sdn_name", "match_score", "zip_code",
     "customer_dob", "sdn_dob", "notary_hit", "tlo_hit", "customer_email",
     "sdn_type", "sdn_country", "customer_state",
     "decision", "confidence", "rule_summary",
