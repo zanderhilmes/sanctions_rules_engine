@@ -196,25 +196,37 @@ class SanctionsPipeline:
         return records
 
     def write_output(self, records: List[AuditRecord]) -> None:
-        cfg = self.config.output
-        Path(cfg.csv_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(cfg.json_path).parent.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%Y-%m-%d_%H%M")
 
-        with open(cfg.csv_path, "w", newline="", encoding="utf-8") as f:
+        def _stamped(path: str) -> str:
+            p = Path(path)
+            return str(p.with_stem(f"{p.stem}_{ts}"))
+
+        cfg = self.config.output
+        csv_path = _stamped(cfg.csv_path)
+        json_path = _stamped(cfg.json_path)
+
+        Path(csv_path).parent.mkdir(parents=True, exist_ok=True)
+
+        self._last_csv_path = csv_path
+        self._last_json_path = json_path
+
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=_AUDIT_FIELDNAMES)
             writer.writeheader()
             for r in records:
                 row = r.model_dump()
                 row["processed_at"] = row["processed_at"].isoformat()
                 writer.writerow({k: row.get(k, "") for k in _AUDIT_FIELDNAMES})
-        log.info("Audit CSV written: %s", cfg.csv_path)
+        log.info("Audit CSV written: %s", csv_path)
 
-        with open(cfg.json_path, "w", encoding="utf-8") as f:
+        with open(json_path, "w", encoding="utf-8") as f:
             for r in records:
                 row = r.model_dump()
                 row["processed_at"] = row["processed_at"].isoformat()
                 f.write(json.dumps(row) + "\n")
-        log.info("Audit JSON written: %s", cfg.json_path)
+        log.info("Audit JSON written: %s", json_path)
 
     def print_summary(self, records: List[AuditRecord]) -> None:
         total = len(records)
@@ -232,8 +244,8 @@ class SanctionsPipeline:
             print(f"  {decision:<15} {count:>4} ({pct:.1f}%)")
         print(f"  {'LLM calls':<15} {llm_count:>4} ({100.0*llm_count/total:.1f}%)")
         print(f"{'='*50}")
-        print(f"  Output: {self.config.output.csv_path}")
-        print(f"          {self.config.output.json_path}")
+        print(f"  Output: {getattr(self, '_last_csv_path', self.config.output.csv_path)}")
+        print(f"          {getattr(self, '_last_json_path', self.config.output.json_path)}")
         print()
 
 
