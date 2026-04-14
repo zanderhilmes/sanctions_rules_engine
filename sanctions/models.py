@@ -44,6 +44,7 @@ class Alert(BaseModel):
 
     # Populated by SnowflakeEnricher (account creation date lookup)
     account_created_at: Optional[str] = None  # "YYYY-MM-DD" — used by AgeImprobabilityRule
+    customer_dob_source: Optional[str] = None  # "DOB_HISTORY" | "IDV_ATTEMPTS" | "CUSTOMER_SUMMARY" | "TLOXP" | "BRIDGER"
 
     # Populated by TLOxpEnricher (when enabled)
     tlo_dob: Optional[str] = None           # DOB returned by TLOxp
@@ -79,6 +80,7 @@ class AuditRecord(BaseModel):
     match_score: float
     zip_code: Optional[str]
     customer_dob: Optional[str]
+    customer_dob_source: Optional[str]
     sdn_dob: Optional[str]
     sdn_date_added: Optional[str]
     notary_hit: Optional[bool]
@@ -110,6 +112,7 @@ class AuditRecord(BaseModel):
             match_score=alert.match_score,
             zip_code=alert.zip_code,
             customer_dob=alert.customer_dob,
+            customer_dob_source=alert.customer_dob_source,
             sdn_dob=alert.sdn_dob,
             sdn_date_added=alert.sdn_date_added,
             notary_hit=alert.notary_hit,

@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 _AUDIT_FIELDNAMES = [
     "alert_id", "account_id", "customer_name", "sdn_name", "match_score", "zip_code",
-    "customer_dob", "sdn_dob", "sdn_date_added", "notary_hit", "tlo_hit", "customer_email",
+    "customer_dob", "customer_dob_source", "sdn_dob", "sdn_date_added", "notary_hit", "tlo_hit", "customer_email",
     "sdn_type", "sdn_country", "customer_state",
     "decision", "confidence", "rule_summary",
     "llm_called", "llm_rationale", "llm_model", "processed_at",
@@ -435,13 +435,15 @@ def _load_from_bridger_csv(path: str) -> List[Alert]:
         ssn_raw = _opt(row.get("SSN"))
         ssn_confirmed = ssn_raw is not None and ssn_raw != ""
 
+        bridger_dob = _bridger_dob(_opt(row.get("DOB")))
         alerts.append(Alert(
             alert_id=aid,
             account_id=_extract_customer_token(_opt(row.get("Account ID"))),
             customer_name=str(row.get("Name", "")).strip(),
             sdn_name=entity_name,
             match_score=score,
-            customer_dob=_bridger_dob(_opt(row.get("DOB"))),
+            customer_dob=bridger_dob,
+            customer_dob_source="BRIDGER" if bridger_dob else None,
             sdn_dob=_bridger_dob(_opt(row.get("ERF_DOB"))),
             customer_ssn_confirmed=ssn_confirmed,
             sdn_aliases=aliases,

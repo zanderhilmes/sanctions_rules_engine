@@ -145,6 +145,7 @@ class SnowflakeEnricher:
             dob = self._lookup_dob_history(alert.account_id)
             if dob is not None:
                 alert.customer_dob = dob
+                alert.customer_dob_source = "DOB_HISTORY"
                 log.info(
                     "[snowflake] Alert %s: backfilled customer_dob=%s from DOB history",
                     alert.alert_id, dob,
@@ -155,6 +156,7 @@ class SnowflakeEnricher:
 
         if dob is not None and not alert.customer_dob:
             alert.customer_dob = dob
+            alert.customer_dob_source = "IDV_ATTEMPTS"
             log.info(
                 "[snowflake] Alert %s: backfilled customer_dob=%s from IDV record",
                 alert.alert_id, dob,
@@ -172,6 +174,7 @@ class SnowflakeEnricher:
             dob = self._lookup_customer_summary(alert.account_id)
             if dob is not None:
                 alert.customer_dob = dob
+                alert.customer_dob_source = "CUSTOMER_SUMMARY"
                 log.info(
                     "[snowflake] Alert %s: backfilled customer_dob=%s from CUSTOMER_SUMMARY",
                     alert.alert_id, dob,
