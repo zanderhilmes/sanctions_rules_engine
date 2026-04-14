@@ -10,15 +10,28 @@ from typing import List
 from sanctions.models import Alert, Disposition, RuleFlag
 
 _SYSTEM_PROMPT = """\
-You are a conservative sanctions compliance analyst reviewing potential false-positive \
-alerts against the OFAC Specially Designated Nationals (SDN) watchlist.
+You are a sanctions compliance analyst reviewing potential false-positive alerts \
+against the OFAC Specially Designated Nationals (SDN) watchlist.
 
 Your task is to determine whether an alert is a FALSE POSITIVE (safe to auto-clear) \
 or requires ESCALATION to a human compliance officer.
 
-IMPORTANT GUIDELINES:
-- When in doubt, ESCALATE. Never auto-clear if there is genuine ambiguity.
-- A genuine SDN match carries severe regulatory and reputational risk.
+CLEARING POLICY — F+ 1B (DOB mismatch):
+Per compliance policy, a confirmed date-of-birth mismatch between the customer and the \
+SDN entry is independently sufficient to clear an alert (F+ 1Bwc). When the dob_mismatch \
+rule has fired with direction=CLEAR, you MUST clear the alert unless a specific reason \
+exists to doubt the DOB data (e.g., the DOB source is unreliable or the gap is less than \
+2 years). Do NOT require SSN confirmation or third-party lookup (TLOxp/Notary) as a \
+precondition for clearing on DOB mismatch grounds.
+
+DECISION TREE (follow in order):
+1. If SDN DOB is known and does NOT match customer DOB → AUTO_CLEAR (F+ 1B) unless \
+   there is a specific reason to doubt the DOB data.
+2. If SDN DOB is unknown → evaluate name, geography, and entity type.
+3. If SDN DOB matches customer DOB exactly → ESCALATE or perform alternative reviews.
+
+OTHER GUIDELINES:
+- When in doubt on non-DOB grounds, ESCALATE. A genuine SDN match carries severe risk.
 - Consider name similarity, geographic plausibility, entity type, and SDN program context.
 
 Respond ONLY with valid JSON matching this exact schema:
@@ -84,6 +97,9 @@ def build_prompt(alert: Alert, disposition: Disposition) -> str:
     rule_summary = _format_rule_flags(disposition.rule_flags)
     customer_profile = _format_customer_profile(alert)
 
+    customer_dob_display = alert.customer_dob or "not available"
+    sdn_dob_display = alert.sdn_dob or "not available"
+
     prompt = f"""\
 ## Alert Under Review
 
@@ -92,6 +108,8 @@ def build_prompt(alert: Alert, disposition: Disposition) -> str:
 | Customer Name    | {alert.customer_name}          |
 | SDN Name         | {alert.sdn_name}               |
 | Match Score      | {alert.match_score:.1f} / 100  |
+| Customer DOB     | {customer_dob_display}         |
+| SDN DOB          | {sdn_dob_display}              |
 | Customer Zip     | {zip_display}                  |
 | Customer State   | {customer_state}               |
 | SDN Type         | {sdn_type}                     |
@@ -113,17 +131,24 @@ Rule engine weighted confidence score: {disposition.confidence:.3f} (threshold: 
 
 ## Reasoning Checklist
 
-Please consider the following in your analysis:
-1. **Name similarity**: How closely does the customer name match the SDN name and aliases?
+Please consider the following in order:
+1. **Date of birth (apply first — F+ 1B policy)**:
+   - Customer DOB: {customer_dob_display} | SDN DOB: {sdn_dob_display}
+   - If both are known and do NOT match → AUTO_CLEAR per policy. Do not require SSN or
+     third-party lookup to clear on this basis. Only deviate if the gap is less than 2 years
+     or there is a specific reason to doubt the DOB data.
+   - If SDN DOB is unknown → skip to step 2.
+   - If both match exactly → ESCALATE or apply alternative reviews.
+2. **Name similarity**: How closely does the customer name match the SDN name and aliases?
    Are there transliteration differences, honorifics, or name-order variations that explain the match?
-2. **Geographic plausibility**: Is it plausible that a {customer_state}-based customer
+3. **Geographic plausibility**: Is it plausible that a {customer_state}-based customer
    is the same person/entity as the {sdn_country} SDN entry?
-3. **Account verification**: The customer account is {'VERIFIED' if alert.customer_verified else 'UNVERIFIED'}.
-   {'Verified PII should be weighted more heavily.' if alert.customer_verified else 'Limited PII is available — be conservative.'}
-4. **SDN program context**: The SDN is listed under program '{sdn_program}'.
+4. **Account verification**: The customer account is {'VERIFIED' if alert.customer_verified else 'UNVERIFIED'}.
+   {'Verified PII should be weighted more heavily.' if alert.customer_verified else 'Lack of verification is not itself a reason to override a DOB mismatch clearing.'}
+5. **SDN program context**: The SDN is listed under program '{sdn_program}'.
    Does the customer's profile fit the targeted population?
-5. **Entity type**: The SDN is a '{sdn_type}'. Does this match the customer type?
-6. **Alias coverage**: Do any SDN aliases provide a closer match to the customer name?
+6. **Entity type**: The SDN is a '{sdn_type}'. Does this match the customer type?
+7. **Alias coverage**: Do any SDN aliases provide a closer match to the customer name?
 
 Respond with JSON only."""
 
