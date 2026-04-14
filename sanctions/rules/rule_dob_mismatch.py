@@ -6,17 +6,21 @@ From the guide:
   "Cash Customer DOB does not match SDN DOB DD/MM/YYYY → Clear - DOB Mismatch [F+ 1B]"
   "If SDN DOB is unknown, skip to Location."
 
-Weight behaviour depends on the Bridger match score:
+Weight behaviour depends on the DOB source and Bridger match score:
 
-  match_score < high_score_threshold (default 80):
-    → HARD CLEAR (weight=0.90) — overrides name-match hard escalation and auto-clears.
-      At low scores the name similarity is already weak, so DOB mismatch is decisive.
+  customer_dob_source is "DOB_HISTORY" or "IDV_ATTEMPTS" (IDV-confirmed):
+    → HARD CLEAR (weight=0.90) regardless of match score.
+      IDV-confirmed DOB is authoritative identity verification — if it doesn't match
+      the SDN DOB, we can be confident this is a different person (F+ 1B).
 
-  match_score >= high_score_threshold:
+  DOB from other sources (BRIDGER, CUSTOMER_SUMMARY, unknown) AND match_score < high_score_threshold:
+    → HARD CLEAR (weight=0.90) — name similarity is weak, DOB mismatch is decisive.
+
+  DOB from other sources AND match_score >= high_score_threshold:
     → CONTESTED CLEAR (weight=0.75) — strong clearing signal but not a hard override.
       The registry detects the combination of hard ESCALATE (name match) + contested
       CLEAR (DOB mismatch) and routes to PENDING → LLM for human-in-the-loop review.
-      When the name match is very close, a DOB discrepancy alone should not auto-clear.
+      When the name match is very close and DOB is not IDV-confirmed, route to LLM.
 
 Comparison logic:
   - If both DOBs parse to full dates     → compare exact day/month/year
@@ -91,17 +95,17 @@ class DOBMismatchRule(BaseRule):
                 detail=f"Could not parse SDN DOB '{sdn_dob_str}' — DOB check skipped",
             )
 
-        # Choose weight based on match score
-        clear_weight = (
-            _CONTESTED_CLEAR_WEIGHT
-            if alert.match_score >= self.high_score_threshold
-            else _HARD_CLEAR_WEIGHT
-        )
-        routing_note = (
-            "contested → LLM review"
-            if clear_weight < _HARD_CLEAR_WEIGHT
-            else "hard clear [F+ 1B]"
-        )
+        # IDV-confirmed DOB is authoritative — hard clear regardless of match score
+        idv_confirmed = getattr(alert, "customer_dob_source", None) in ("DOB_HISTORY", "IDV_ATTEMPTS")
+        if idv_confirmed:
+            clear_weight = _HARD_CLEAR_WEIGHT
+            routing_note = f"hard clear [F+ 1B] — IDV-confirmed DOB ({alert.customer_dob_source})"
+        elif alert.match_score >= self.high_score_threshold:
+            clear_weight = _CONTESTED_CLEAR_WEIGHT
+            routing_note = "contested → LLM review (DOB not IDV-confirmed)"
+        else:
+            clear_weight = _HARD_CLEAR_WEIGHT
+            routing_note = "hard clear [F+ 1B]"
 
         # If either is year-only, compare years with ±1 tolerance
         if is_year_only(customer_date) or is_year_only(sdn_date):
