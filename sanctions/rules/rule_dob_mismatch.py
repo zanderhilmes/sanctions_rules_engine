@@ -23,14 +23,16 @@ Weight behaviour depends on the DOB source and Bridger match score:
       When the name match is very close and DOB is not IDV-confirmed, route to LLM.
 
 Comparison logic:
-  - If both DOBs parse to full dates     → compare exact day/month/year
-  - If either is year-only ("1960")      → compare years with ±1 tolerance
-      |year_diff| > 1  → CLEAR (F+ 1B) — confirmed mismatch
-      |year_diff| <= 1 → no signal      — within data-quality tolerance
-  - Either DOB unavailable               → no signal (guide: skip to Location)
+  - IDV-confirmed DOB (DOB_HISTORY, IDV_ATTEMPTS):
+      Exact comparison — any difference clears (IDV is authoritative).
+  - Unverified DOB (BRIDGER, CUSTOMER_SUMMARY, unknown, or year-only):
+      Year-based comparison with ±1 year tolerance:
+        |year_diff| > 1  → CLEAR (F+ 1B) — confirmed mismatch
+        |year_diff| <= 1 → no signal      — within data-quality tolerance
+  - Either DOB unavailable → no signal (guide: skip to Location)
 
-The ±1 year tolerance on year-only comparisons accounts for common data-entry
-errors and different calendar/year-cutoff conventions in source systems.
+The ±1 year tolerance for unverified DOBs accounts for data-entry errors,
+calendar convention differences, and approximate dates in source systems.
 """
 from __future__ import annotations
 
@@ -107,44 +109,46 @@ class DOBMismatchRule(BaseRule):
             clear_weight = _HARD_CLEAR_WEIGHT
             routing_note = "hard clear [F+ 1B]"
 
-        # If either is year-only, compare years with ±1 tolerance
-        if is_year_only(customer_date) or is_year_only(sdn_date):
-            year_diff = abs(customer_date.year - sdn_date.year)
-            if year_diff > 1:
+        # IDV-confirmed DOB: exact comparison — any difference clears
+        if idv_confirmed:
+            if customer_date != sdn_date:
                 return RuleFlag(
                     rule_name=self.name,
                     triggered=True,
                     direction="CLEAR",
                     weight=clear_weight,
                     detail=(
-                        f"Birth year mismatch: customer {customer_date.year} "
-                        f"vs SDN {sdn_date.year} (diff={year_diff}y, score={alert.match_score:.0f}) "
-                        f"— DOB mismatch [F+ 1B] ({routing_note})"
+                        f"DOB mismatch: customer {customer_date.isoformat()} "
+                        f"vs SDN {sdn_date.isoformat()} (score={alert.match_score:.0f}) "
+                        f"— [F+ 1B] ({routing_note})"
                     ),
                 )
-            # Within ±1 year — could be data-entry error; treat as inconclusive
+        else:
+            # Unverified DOB: ±1 year tolerance applies regardless of whether dates are full or year-only.
+            # Within 1 year could be a data-entry error or calendar convention difference — inconclusive.
+            year_diff = abs(customer_date.year - sdn_date.year)
+            if year_diff > 1:
+                cust_str = customer_date.isoformat() if not is_year_only(customer_date) else str(customer_date.year)
+                sdn_str = sdn_date.isoformat() if not is_year_only(sdn_date) else str(sdn_date.year)
+                return RuleFlag(
+                    rule_name=self.name,
+                    triggered=True,
+                    direction="CLEAR",
+                    weight=clear_weight,
+                    detail=(
+                        f"DOB mismatch: customer {cust_str} vs SDN {sdn_str} "
+                        f"(diff={year_diff}y, score={alert.match_score:.0f}) "
+                        f"— [F+ 1B] ({routing_note})"
+                    ),
+                )
             return RuleFlag(
                 rule_name=self.name,
                 triggered=False,
                 direction=None,
                 weight=self.weight,
                 detail=(
-                    f"Birth years within 1-year tolerance: customer {customer_date.year} "
+                    f"DOB within ±1 year tolerance (unverified): customer {customer_date.year} "
                     f"vs SDN {sdn_date.year} — inconclusive"
-                ),
-            )
-
-        # Both are full dates — compare exactly
-        if customer_date != sdn_date:
-            return RuleFlag(
-                rule_name=self.name,
-                triggered=True,
-                direction="CLEAR",
-                weight=clear_weight,
-                detail=(
-                    f"DOB mismatch: customer {customer_date.isoformat()} "
-                    f"vs SDN {sdn_date.isoformat()} (score={alert.match_score:.0f}) "
-                    f"— [F+ 1B] ({routing_note})"
                 ),
             )
 
