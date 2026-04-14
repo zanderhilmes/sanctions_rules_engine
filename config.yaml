@@ -33,6 +33,8 @@ snowflake:
   token: "${SNOWFLAKE_TOKEN}"
   # DOB history — primary customer DOB source (backs CASH_W_DOB)
   dob_history_table: "APP_CASH.HEALTH.IDENTITY_DOB_HISTORY"
+  # Customer summary — BIRTH_YEAR fallback when DOB history is absent
+  customer_summary_table: "APP_CASH.APP.CUSTOMER_SUMMARY"
   # Account creation date — used by age improbability rule when customer_dob is absent
   account_table: "APP_CASH.APP.CASH_CUSTOMER_IDENTITY_W_AFTERPAY"
   account_id_col: "CUSTOMER_TOKEN"

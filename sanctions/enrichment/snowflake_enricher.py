@@ -6,6 +6,7 @@ DOB lookup order (first hit wins):
   1. APP_CASH.HEALTH.IDENTITY_DOB_HISTORY  — most reliable; has full DOB DATE column
      (the source that populates CASH_W_DOB on CASH_CUSTOMER_IDENTITY_W_AFTERPAY)
   2. APP_CASH.HEALTH.IDENTITY_IDV_ATTEMPTS — fallback; only present after IDV completion
+  3. APP_CASH.APP.CUSTOMER_SUMMARY         — BIRTH_YEAR only; last resort
 
 Fields populated on Alert:
     customer_dob        — 'YYYY-MM-DD' or 'YYYY' string; enables DOB mismatch rule (F+ 1B)
@@ -95,6 +96,7 @@ class SnowflakeEnricher:
         account_id_col: str = "CUSTOMER_TOKEN",
         account_created_col: str = "CREATED_AT",
         dob_history_table: str = "APP_CASH.HEALTH.IDENTITY_DOB_HISTORY",
+        customer_summary_table: str = "APP_CASH.APP.CUSTOMER_SUMMARY",
     ) -> None:
         if not _SF_AVAILABLE:
             raise RuntimeError(
@@ -107,6 +109,7 @@ class SnowflakeEnricher:
         self._account_id_col = account_id_col
         self._account_created_col = account_created_col
         self._dob_history_table = dob_history_table or ""
+        self._customer_summary_table = customer_summary_table or ""
 
         connect_kwargs: dict = dict(
             account=account,
@@ -163,6 +166,16 @@ class SnowflakeEnricher:
                 "[snowflake] Alert %s: customer marked verified (IDV passed)",
                 alert.alert_id,
             )
+
+        # ---- DOB from CUSTOMER_SUMMARY.BIRTH_YEAR (last resort) ----
+        if self._customer_summary_table and not alert.customer_dob:
+            dob = self._lookup_customer_summary(alert.account_id)
+            if dob is not None:
+                alert.customer_dob = dob
+                log.info(
+                    "[snowflake] Alert %s: backfilled customer_dob=%s from CUSTOMER_SUMMARY",
+                    alert.alert_id, dob,
+                )
 
         # Account creation date — only when table is configured
         if self._account_table and not getattr(alert, "account_created_at", None):
@@ -249,6 +262,32 @@ class SnowflakeEnricher:
 
         # Fallback to text columns
         return _build_dob(birth_year_raw, birth_month_raw, birth_day_raw)
+
+    def _lookup_customer_summary(self, account_id: str) -> Optional[str]:
+        """
+        Return customer DOB from CUSTOMER_SUMMARY.BIRTH_YEAR — year-only last resort.
+        Returns 'YYYY' string, or None on miss/error.
+        """
+        query = (
+            "SELECT BIRTH_YEAR "
+            "FROM " + self._customer_summary_table + " "
+            "WHERE CUSTOMER_TOKEN = %s "
+            "LIMIT 1"
+        )
+        try:
+            cur = self._conn.cursor()
+            cur.execute(query, (account_id,))
+            row = cur.fetchone()
+            cur.close()
+        except Exception as exc:
+            log.warning("[snowflake] CUSTOMER_SUMMARY lookup failed for %s: %s", account_id, exc)
+            return None
+
+        if row is None or row[0] is None:
+            log.debug("[snowflake] No BIRTH_YEAR in CUSTOMER_SUMMARY for customer_token=%s", account_id)
+            return None
+
+        return _build_dob(row[0], None, None)  # year-only → 'YYYY'
 
     def _lookup_account_created(self, account_id: str) -> Optional[str]:
         """

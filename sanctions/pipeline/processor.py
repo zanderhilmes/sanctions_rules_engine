@@ -26,6 +26,7 @@ from sanctions.rules.rule_dob_mismatch import DOBMismatchRule
 from sanctions.rules.rule_geography import GeographyRule
 from sanctions.rules.rule_low_score import LowScoreRule
 from sanctions.rules.rule_name_components import NameComponentRule
+from sanctions.rules.rule_missing_dob import MissingDOBRule
 from sanctions.rules.rule_prior_denylist import PriorDenylistRule
 from sanctions.utils import zip_to_state
 
@@ -53,6 +54,7 @@ class SanctionsPipeline:
         self.registry.register(NameComponentRule())
         self.registry.register(AliasMatchRule())
         self.registry.register(DOBMismatchRule())
+        self.registry.register(MissingDOBRule())
         self.registry.register(
             AgeImprobabilityRule(
                 age_improbability_max_years=config.rules.age_improbability_max_years,
@@ -81,6 +83,7 @@ class SanctionsPipeline:
                     account_id_col=sf.account_id_col,
                     account_created_col=sf.account_created_col,
                     dob_history_table=sf.dob_history_table,
+                    customer_summary_table=sf.customer_summary_table,
                 )
             except Exception as exc:
                 log.warning("Snowflake enricher disabled — connection failed: %s", exc)

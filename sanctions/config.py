@@ -60,6 +60,8 @@ class SnowflakeConfig(BaseModel):
     account_created_col: str = "CREATED_AT"
     # DOB history table — richer source than IDV attempts (has full DOB date column)
     dob_history_table: str = "APP_CASH.HEALTH.IDENTITY_DOB_HISTORY"
+    # Customer summary table — BIRTH_YEAR fallback when DOB history is absent
+    customer_summary_table: str = "APP_CASH.APP.CUSTOMER_SUMMARY"
 
 
 class TLOConfig(BaseModel):

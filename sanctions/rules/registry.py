@@ -4,7 +4,8 @@ Rule registry: weighted-vote accumulator with hard-clear and hard-escalate signa
 Vote accumulation logic:
   - Each rule returns a RuleFlag with direction CLEAR / ESCALATE / None
   - effective_weight = flag.weight (allows a rule to return different weights per direction)
-  - CLEAR votes accumulate; if sum >= auto_clear_confidence_threshold → AUTO_CLEAR
+  - CLEAR votes add to clear_score; soft ESCALATE votes subtract from clear_score
+  - If clear_score >= auto_clear_confidence_threshold → AUTO_CLEAR
   - If any CLEAR vote has effective_weight >= clear_hard_weight → HARD CLEAR
   - If any ESCALATE vote has effective_weight >= escalate_hard_weight → HARD ESCALATE
 
@@ -13,6 +14,10 @@ Resolution priority (all rules still run for audit completeness):
   2. HARD ESCALATE — e.g. name token match, alias match
   3. Weighted clear_score >= threshold → AUTO_CLEAR
   4. Otherwise → PENDING (sent to LLM)
+
+Soft ESCALATE votes (weight < escalate_hard_weight) subtract from clear_score rather
+than being ignored — this lets risk signals like missing_dob reduce auto-clear confidence
+without forcing a hard escalation.
 
 This implements the guide's explicit hierarchy: a name match (→ HARD ESCALATE) is
 overridden by a subsequent DOB mismatch (→ HARD CLEAR), per
@@ -86,6 +91,11 @@ class RuleRegistry:
                         hard_escalate = True
                         log.debug("Rule '%s' HARD ESCALATE (weight=%.2f >= %.2f)",
                                   rule.name, effective_weight, self.escalate_hard_weight)
+                    else:
+                        # Soft escalate — subtract from clear_score to reduce auto-clear confidence
+                        clear_score -= effective_weight
+                        log.debug("Rule '%s' soft ESCALATE vote (running score=%.3f)",
+                                  rule.name, clear_score)
 
         # Resolution priority:
         # HARD CLEAR beats HARD ESCALATE — implements guide's "Check DOB after name match"
