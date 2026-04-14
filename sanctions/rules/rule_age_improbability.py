@@ -13,7 +13,7 @@ From the guide:
    age improbability, clear [F+ 1D]."
 
 The guide classifies date-added as a SECONDARY mechanism (to be used alongside a
-name or DOB mismatch). However, when the customer was not yet born at the time of
+name or DOB mismatch). However, when the customer was not yet born or was an infant (age <= 2) at the time of
 sanctioning, the evidence is so strong that this rule fires as a HARD CLEAR
 (weight 0.90) even without a primary mismatch.  Age at sanctioning >= threshold
 (default 5 years) produces only a soft CLEAR signal, consistent with its
@@ -125,7 +125,7 @@ class AgeImprobabilityRule(BaseRule):
             if mode == "account_creation" else ""
         )
 
-        if age_at_sanctioning <= 0:
+        if age_at_sanctioning <= 2:
             return RuleFlag(
                 rule_name=self.name,
                 triggered=True,
@@ -134,7 +134,8 @@ class AgeImprobabilityRule(BaseRule):
                 detail=(
                     f"SDN was added to watchlist in {sdn_added_year} but customer "
                     f"was born in {birth_year}{proxy_note} — age improbability, "
-                    f"impossible to be the same person [F+ 1D]"
+                    f"impossible to be the same person [F+ 1D] "
+                    f"(age at sanctioning: {age_at_sanctioning})"
                 ),
             )
 
