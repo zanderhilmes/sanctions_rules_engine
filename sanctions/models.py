@@ -80,6 +80,7 @@ class AuditRecord(BaseModel):
     zip_code: Optional[str]
     customer_dob: Optional[str]
     sdn_dob: Optional[str]
+    sdn_date_added: Optional[str]
     notary_hit: Optional[bool]
     tlo_hit: Optional[bool]
     customer_email: Optional[str]
@@ -110,6 +111,7 @@ class AuditRecord(BaseModel):
             zip_code=alert.zip_code,
             customer_dob=alert.customer_dob,
             sdn_dob=alert.sdn_dob,
+            sdn_date_added=alert.sdn_date_added,
             notary_hit=alert.notary_hit,
             tlo_hit=alert.tlo_hit,
             customer_email=alert.customer_email,

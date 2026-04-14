@@ -10,18 +10,21 @@ Vote accumulation logic:
   - If any ESCALATE vote has effective_weight >= escalate_hard_weight → HARD ESCALATE
 
 Resolution priority (all rules still run for audit completeness):
-  1. HARD CLEAR  — e.g. DOB mismatch, age improbability (overrides name-match escalation)
-  2. HARD ESCALATE — e.g. name token match, alias match
-  3. Weighted clear_score >= threshold → AUTO_CLEAR
-  4. Otherwise → PENDING (sent to LLM)
+  1. HARD CLEAR (weight >= 0.90)  — age improbability, low-score DOB mismatch
+  2. CONTESTED  — hard ESCALATE present AND a strong-but-not-hard CLEAR vote
+                  (weight in [contested_clear_threshold, clear_hard_weight))
+                  → PENDING so the LLM can adjudicate the conflict
+  3. HARD ESCALATE alone → ESCALATE
+  4. Weighted clear_score >= threshold → AUTO_CLEAR
+  5. Otherwise → PENDING (sent to LLM)
+
+The contested state (step 2) is what routes high-score DOB-mismatch alerts to the
+LLM: name_components fires HARD ESCALATE (0.95) and dob_mismatch at high match score
+fires a contested CLEAR (0.75), triggering LLM review rather than auto-clearing.
 
 Soft ESCALATE votes (weight < escalate_hard_weight) subtract from clear_score rather
 than being ignored — this lets risk signals like missing_dob reduce auto-clear confidence
 without forcing a hard escalation.
-
-This implements the guide's explicit hierarchy: a name match (→ HARD ESCALATE) is
-overridden by a subsequent DOB mismatch (→ HARD CLEAR), per
-"DOB evaluation, if unable to clear by Name".
 """
 from __future__ import annotations
 
@@ -40,11 +43,13 @@ class RuleRegistry:
         auto_clear_confidence_threshold: float = 0.65,
         escalate_hard_weight: float = 0.90,
         clear_hard_weight: float = 0.90,
+        contested_clear_threshold: float = 0.70,
     ) -> None:
         self._rules: List[BaseRule] = []
         self.auto_clear_threshold = auto_clear_confidence_threshold
         self.escalate_hard_weight = escalate_hard_weight
         self.clear_hard_weight = clear_hard_weight
+        self.contested_clear_threshold = contested_clear_threshold
 
     def register(self, rule: BaseRule) -> None:
         self._rules.append(rule)
@@ -59,6 +64,7 @@ class RuleRegistry:
         clear_score = 0.0
         hard_escalate = False
         hard_clear = False
+        max_triggered_clear_weight = 0.0
 
         for rule in self._rules:
             try:
@@ -80,6 +86,8 @@ class RuleRegistry:
                 effective_weight = flag.weight if flag.weight > 0 else rule.weight
                 if flag.direction == "CLEAR":
                     clear_score += effective_weight
+                    if effective_weight > max_triggered_clear_weight:
+                        max_triggered_clear_weight = effective_weight
                     log.debug("Rule '%s' CLEAR vote (running score=%.3f)",
                               rule.name, clear_score)
                     if effective_weight >= self.clear_hard_weight:
@@ -98,7 +106,7 @@ class RuleRegistry:
                                   rule.name, clear_score)
 
         # Resolution priority:
-        # HARD CLEAR beats HARD ESCALATE — implements guide's "Check DOB after name match"
+        # 1. HARD CLEAR — age improbability, low-score DOB mismatch
         if hard_clear:
             return Disposition(
                 decision=Decision.AUTO_CLEAR,
@@ -106,6 +114,19 @@ class RuleRegistry:
                 rule_flags=flags,
             )
 
+        # 2. CONTESTED — hard escalate + strong-but-not-hard clear → LLM adjudicates
+        if hard_escalate and max_triggered_clear_weight >= self.contested_clear_threshold:
+            log.debug(
+                "Contested: hard ESCALATE + clear weight=%.2f >= threshold=%.2f → PENDING",
+                max_triggered_clear_weight, self.contested_clear_threshold,
+            )
+            return Disposition(
+                decision=Decision.PENDING,
+                confidence=clear_score,
+                rule_flags=flags,
+            )
+
+        # 3. HARD ESCALATE alone
         if hard_escalate:
             return Disposition(
                 decision=Decision.ESCALATE,

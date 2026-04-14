@@ -41,6 +41,7 @@ class RulesConfig(BaseModel):
     common_names_file: str = "data/common_names.txt"
     age_improbability_max_years: int = 5
     min_signup_age: int = 18    # Minimum age at account creation (used when customer_dob absent)
+    dob_mismatch_high_score_threshold: float = 80.0   # Above this score, DOB mismatch routes to LLM instead of auto-clearing
 
 
 class SnowflakeConfig(BaseModel):

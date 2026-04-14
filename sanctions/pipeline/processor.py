@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 _AUDIT_FIELDNAMES = [
     "alert_id", "account_id", "customer_name", "sdn_name", "match_score", "zip_code",
-    "customer_dob", "sdn_dob", "notary_hit", "tlo_hit", "customer_email",
+    "customer_dob", "sdn_dob", "sdn_date_added", "notary_hit", "tlo_hit", "customer_email",
     "sdn_type", "sdn_country", "customer_state",
     "decision", "confidence", "rule_summary",
     "llm_called", "llm_rationale", "llm_model", "processed_at",
@@ -53,7 +53,9 @@ class SanctionsPipeline:
         self.registry.register(PriorDenylistRule())
         self.registry.register(NameComponentRule())
         self.registry.register(AliasMatchRule())
-        self.registry.register(DOBMismatchRule())
+        self.registry.register(DOBMismatchRule(
+            high_score_threshold=config.rules.dob_mismatch_high_score_threshold,
+        ))
         self.registry.register(MissingDOBRule())
         self.registry.register(
             AgeImprobabilityRule(

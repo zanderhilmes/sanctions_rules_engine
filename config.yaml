@@ -13,6 +13,8 @@ rules:
   low_score_clear_threshold: 30.0
   common_names_file: "data/common_names.txt"
   age_improbability_max_years: 5
+  # DOB mismatch at high match scores routes to LLM rather than auto-clearing
+  dob_mismatch_high_score_threshold: 80.0
 
 snowflake:
   enabled: true

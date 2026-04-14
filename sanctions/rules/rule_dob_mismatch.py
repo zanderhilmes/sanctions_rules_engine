@@ -6,10 +6,17 @@ From the guide:
   "Cash Customer DOB does not match SDN DOB DD/MM/YYYY → Clear - DOB Mismatch [F+ 1B]"
   "If SDN DOB is unknown, skip to Location."
 
-This rule fires a HARD CLEAR (weight >= clear_hard_weight = 0.90) so it can
-override a hard escalation from name_components.  This correctly implements the
-guide's priority hierarchy: name match proceeds to DOB check, and a DOB mismatch
-there still clears the alert regardless of how closely names matched.
+Weight behaviour depends on the Bridger match score:
+
+  match_score < high_score_threshold (default 80):
+    → HARD CLEAR (weight=0.90) — overrides name-match hard escalation and auto-clears.
+      At low scores the name similarity is already weak, so DOB mismatch is decisive.
+
+  match_score >= high_score_threshold:
+    → CONTESTED CLEAR (weight=0.75) — strong clearing signal but not a hard override.
+      The registry detects the combination of hard ESCALATE (name match) + contested
+      CLEAR (DOB mismatch) and routes to PENDING → LLM for human-in-the-loop review.
+      When the name match is very close, a DOB discrepancy alone should not auto-clear.
 
 Comparison logic:
   - If both DOBs parse to full dates     → compare exact day/month/year
@@ -30,13 +37,17 @@ from sanctions.models import Alert, RuleFlag
 from sanctions.rules.base_rule import BaseRule
 from sanctions.utils import is_year_only, parse_date
 
-_CLEAR_WEIGHT = 0.90   # Hard-clear weight — overrides name-match hard escalation
+_HARD_CLEAR_WEIGHT      = 0.90   # Low match score — decisive, overrides hard escalation
+_CONTESTED_CLEAR_WEIGHT = 0.75   # High match score — strong signal, but routes to LLM
 
 
 class DOBMismatchRule(BaseRule):
     name = "dob_mismatch"
-    weight = _CLEAR_WEIGHT
+    weight = _HARD_CLEAR_WEIGHT
     priority = 15   # Runs after name_components (5) and alias_match (6), before others
+
+    def __init__(self, high_score_threshold: float = 80.0) -> None:
+        self.high_score_threshold = high_score_threshold
 
     def evaluate(self, alert: Alert) -> RuleFlag:
         customer_dob_str = alert.customer_dob
@@ -80,6 +91,18 @@ class DOBMismatchRule(BaseRule):
                 detail=f"Could not parse SDN DOB '{sdn_dob_str}' — DOB check skipped",
             )
 
+        # Choose weight based on match score
+        clear_weight = (
+            _CONTESTED_CLEAR_WEIGHT
+            if alert.match_score >= self.high_score_threshold
+            else _HARD_CLEAR_WEIGHT
+        )
+        routing_note = (
+            "contested → LLM review"
+            if clear_weight < _HARD_CLEAR_WEIGHT
+            else "hard clear [F+ 1B]"
+        )
+
         # If either is year-only, compare years with ±1 tolerance
         if is_year_only(customer_date) or is_year_only(sdn_date):
             year_diff = abs(customer_date.year - sdn_date.year)
@@ -88,10 +111,11 @@ class DOBMismatchRule(BaseRule):
                     rule_name=self.name,
                     triggered=True,
                     direction="CLEAR",
-                    weight=_CLEAR_WEIGHT,
+                    weight=clear_weight,
                     detail=(
                         f"Birth year mismatch: customer {customer_date.year} "
-                        f"vs SDN {sdn_date.year} (diff={year_diff}y) — DOB mismatch [F+ 1B]"
+                        f"vs SDN {sdn_date.year} (diff={year_diff}y, score={alert.match_score:.0f}) "
+                        f"— DOB mismatch [F+ 1B] ({routing_note})"
                     ),
                 )
             # Within ±1 year — could be data-entry error; treat as inconclusive
@@ -112,10 +136,11 @@ class DOBMismatchRule(BaseRule):
                 rule_name=self.name,
                 triggered=True,
                 direction="CLEAR",
-                weight=_CLEAR_WEIGHT,
+                weight=clear_weight,
                 detail=(
                     f"DOB mismatch: customer {customer_date.isoformat()} "
-                    f"vs SDN {sdn_date.isoformat()} — [F+ 1B]"
+                    f"vs SDN {sdn_date.isoformat()} (score={alert.match_score:.0f}) "
+                    f"— [F+ 1B] ({routing_note})"
                 ),
             )
 
