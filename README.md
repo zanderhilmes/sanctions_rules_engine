@@ -24,8 +24,8 @@ Bridger CSV
     ▼
 SanctionsPipeline
     │
-    ├── SnowflakeEnricher   (customer DOB, IDV status, account creation date)
-    ├── OFACEnricher        (SDN DOB + date-added from sdn_advanced.xml)
+    ├── SnowflakeEnricher   (customer DOB, IDV status, account creation date, address state)
+    ├── OFACEnricher        (SDN DOB, date-added, place-of-birth country from sdn_advanced.xml)
     └── TLOxpEnricher       (customer DOB + state from TLOxp — stub, no API key yet)
     │
     ├── RuleRegistry        (weighted-vote engine, runs all rules)
@@ -33,7 +33,7 @@ SanctionsPipeline
     └── ClaudeClient        (LLM review for PENDING cases only)
     │
     ▼
-audit_trail.csv / audit_trail.json
+audit_trail_<timestamp>.csv / audit_trail_<timestamp>.json
 ```
 
 ### Key files
@@ -56,43 +56,67 @@ audit_trail.csv / audit_trail.json
 
 All rules run on every alert for audit completeness. The registry applies this resolution order after all rules have fired:
 
-1. **HARD CLEAR** — any CLEAR vote with weight ≥ 0.90 → `AUTO_CLEAR` (overrides name-match escalation)
-2. **HARD ESCALATE** — any ESCALATE vote with weight ≥ 0.90 → `ESCALATE`
-3. **Weighted clear score** ≥ threshold (default 0.65) → `AUTO_CLEAR`
-4. Otherwise → `PENDING` (sent to LLM)
+1. **HARD CLEAR** — any CLEAR vote with weight ≥ 0.90 → `AUTO_CLEAR` (overrides everything, including hard escalation)
+2. **CONTESTED** — hard escalate present AND a strong-but-not-hard CLEAR vote (weight ≥ 0.70) → `PENDING` → LLM adjudicates the conflict
+3. **HARD ESCALATE** — any ESCALATE vote with weight ≥ 0.90, no competing clear → `ESCALATE`
+4. **Weighted clear score** ≥ threshold (default 0.65) → `AUTO_CLEAR`
+5. Otherwise → `PENDING` (sent to LLM)
+
+Soft ESCALATE votes (weight < 0.90) subtract from the cumulative clear score rather than setting the hard-escalate flag, allowing risk signals to reduce auto-clear confidence without forcing mandatory escalation.
 
 | Rule | Priority | Direction | Weight | Guide ref | Trigger condition |
 |---|---|---|---|---|---|
+| `prior_sanctions_denylist` | 3 | ESCALATE | 0.95 | — | Customer was previously denylisted for sanctions |
 | `name_components` | 5 | CLEAR / ESCALATE | 0.85 / 0.80 | F+ 1A | Token-set comparison (3-case table) |
 | `alias_match` | 6 | ESCALATE | 0.95 | — | Customer name matches an SDN alias |
-| `dob_mismatch` | 15 | CLEAR | 0.90 | F+ 1B | Customer DOB ≠ SDN DOB (±1yr tolerance for year-only) |
-| `age_improbability` | 16 | CLEAR | 0.90 / 0.50 | F+ 1D | SDN added before customer was born (hard) or customer was very young (soft) |
-| `low_score` | 20 | CLEAR | 0.60 | — | Match score < 30 |
-| `common_name` | 30 | CLEAR | 0.45 | — | Customer name is a high-frequency common name |
-| `geography` | 40 | CLEAR | 0.35 | — | US customer vs foreign SDN (state ≠ SDN country) |
+| `low_score` | 10 | CLEAR | 0.60 | — | Match score < 30 |
+| `dob_mismatch` | 15 | CLEAR | 0.90 / 0.75 | F+ 1B | Customer DOB ≠ SDN DOB; 0.90 for IDV-confirmed or low-score, 0.75 (contested) for high-score unverified |
+| `age_improbability` | 16 | CLEAR | 0.90 / 0.50 | F+ 1D | SDN added before customer was born (hard) or customer was very young at time of listing (soft) |
+| `missing_dob` | 17 | ESCALATE | 0.30 | — | No customer DOB on record; soft signal that reduces auto-clear confidence |
+| `common_name` | 20 | CLEAR | 0.45 | — | Customer name is a high-frequency common name |
+| `geography` | 30 | CLEAR | 0.35 | — | US customer (zip or state) vs foreign SDN country |
 
-**Key hierarchy note:** A name token match (`name_components` → HARD ESCALATE) is overridden by a DOB mismatch (`dob_mismatch` → HARD CLEAR). This implements the guide's instruction to proceed from name evaluation to DOB evaluation — a confirmed DOB mismatch clears the alert even if the name is an exact match.
+**Key hierarchy note:** A name token match (`name_components` ESCALATE 0.80) combined with a hard DOB mismatch (`dob_mismatch` CLEAR 0.90) results in AUTO_CLEAR — the hard clear overrides at step 1. When DOB data is unverified and the match score is high, `dob_mismatch` fires a contested clear (0.75), triggering step 2: PENDING → LLM. This implements the guide's instruction to evaluate DOB after name — a confirmed DOB mismatch clears even a strong name match.
+
+**`alias_match` note:** Weight 0.95 (hard escalate) ensures that when a customer name matches an SDN alias, the case always routes to LLM or escalation. A hard DOB mismatch (0.90) still auto-clears via step 1. A contested DOB mismatch (0.75, high score + unverified) triggers step 2 → LLM.
 
 ---
 
 ## Enrichment
 
-Customer DOB is the most powerful signal (enables DOB mismatch hard-clear). The pipeline backfills it from multiple sources in order of preference:
+### Customer data (Snowflake)
 
-### Customer DOB sources (first hit wins)
+Customer DOB is the most powerful signal — it enables the DOB mismatch hard-clear. The pipeline backfills from these sources in order of preference (first hit wins):
 
-1. **`IDENTITY_DOB_HISTORY`** — primary source; the table that backs `CASH_W_DOB`. Has a full `DOB DATE` column.
-2. **`IDENTITY_IDV_ATTEMPTS`** — fallback; only present for customers who completed IDV.
-3. **TLOxp** — stub; activated once an API key is provisioned.
-4. **Account creation date proxy** — when no DOB is available, `AgeImprobabilityRule` derives the latest possible birth year from `CUSTOMER_CREATED_AT` minus the minimum signup age (18). Only fires the age rule; does not populate `customer_dob`.
+1. **`IDENTITY_DOB_HISTORY`** — primary source; the table that backs `CASH_W_DOB`. Returns a full `DOB DATE` column.
+2. **`IDENTITY_IDV_ATTEMPTS`** — fallback; only present for customers who completed IDV. Also sets `customer_verified = True` when a successful attempt exists.
+3. **`CUSTOMER_SUMMARY`** — last resort; year-only `BIRTH_YEAR` column.
+4. **Account creation date proxy** — when no DOB is available, `AgeImprobabilityRule` derives the latest possible birth year from `CUSTOMER_CREATED_AT` minus the minimum signup age (18). Enables the age rule without populating `customer_dob`.
 
-### SDN DOB + date-added
+**IDV-confirmed address** (`customer_state`) is populated from `IDENTITY_IDV_ATTEMPTS` when `snowflake.address_state_col` is configured. This is required for the country mismatch rule (currently disabled — see below).
 
-OFAC's `sdn_advanced.xml` is downloaded at startup (cached 24h) and used to backfill:
-- `sdn_dob` — the SDN entity's birth date (required for DOB mismatch rule)
-- `sdn_date_added` — the date the entity was listed (required for age improbability rule)
+### SDN data (OFAC XML)
 
-Both fields are typically absent from Bridger CSV exports. The preferred long-term fix is to configure Bridger's `ERF_DOB` export field; until then, the OFAC XML enricher handles it automatically.
+OFAC's `sdn_advanced.xml` is downloaded at startup and cached for 24 hours. It backfills:
+
+| Field | Source in XML | Used by |
+|---|---|---|
+| `sdn_dob` | `Feature[@FeatureTypeID='8']` (Birthdate) | `dob_mismatch` rule |
+| `sdn_date_added` | `SanctionsEntries/EntryEvent/Date` | `age_improbability` rule |
+| `sdn_country` | `Feature[@FeatureTypeID='9']` (Place of Birth) | Audit trail only — **not used for rule-based clearing** |
+
+`sdn_dob` and `sdn_date_added` are typically absent from Bridger CSV exports. The preferred long-term fix is to configure Bridger's `ERF_DOB` export field; until then, the OFAC XML enricher handles it automatically.
+
+`sdn_country` is derived from Place of Birth and is visible in the audit trail for analyst context. It is intentionally not used for auto-clearing: place of birth is not equivalent to current residence, and an SDN may reside in a different country.
+
+### Country mismatch rule (disabled)
+
+`CountryMismatchRule` (`sanctions/rules/rule_country_mismatch.py`) is implemented but not registered. It would hard-clear (weight 0.95) when a customer has a confirmed US address AND the SDN's location is non-US. Two data sources are required before it can be enabled:
+
+1. **Customer address** — configure `snowflake.address_state_col` to pull a US state from a verified IDV record
+2. **SDN location** — a reliable non-POB source for the SDN's location (OFAC Place of Birth ≠ current residence)
+
+To re-enable once both sources are available, uncomment the two lines in `sanctions/pipeline/processor.py`.
 
 ---
 
@@ -124,27 +148,28 @@ snowflake:
   authenticator: "externalbrowser"   # or "https://login.block.xyz" for Okta SSO
 ```
 
-### 4. Generate sample data and run
+### 4. Run
 
 ```bash
-# Generate 50 synthetic alerts for testing
-python main.py --generate-sample
-
-# Run the pipeline
-python main.py --input data/sample_alerts.csv
-
-# Run on a real Bridger CSV
+# Run on a Bridger CSV export
 python main.py --input path/to/bridger_export.csv
 
+# Run on multiple files in one pass (single Snowflake connection)
+python main.py --input file1.csv file2.csv file3.csv
+
+# Generate synthetic test data
+python main.py --generate-sample
+python main.py --input data/sample_alerts.csv
+
 # Debug logging
-python main.py --input data/sample_alerts.csv -v
+python main.py --input path/to/bridger_export.csv -v
 ```
 
 ### 5. Review output
 
-Results are written to:
-- `output/audit_trail.csv` — one row per alert with decision, confidence, triggered rules
-- `output/audit_trail.json` — same in JSON-lines format
+Results are written to timestamped files:
+- `output/audit_trail_<timestamp>.csv` — one row per alert with decision, confidence, triggered rules, LLM rationale
+- `output/audit_trail_<timestamp>.json` — same in JSON-lines format
 
 ---
 
@@ -158,28 +183,31 @@ llm:
   max_tokens: 512
 
 rules:
-  auto_clear_confidence_threshold: 0.65    # Weighted clear score to auto-clear
-  escalate_hard_weight: 0.90               # ESCALATE weight for hard-escalate
-  clear_hard_weight: 0.90                  # CLEAR weight for hard-clear
-  low_score_clear_threshold: 30.0          # Score below which low_score rule fires
+  auto_clear_confidence_threshold: 0.65    # Weighted clear score required to auto-clear
+  escalate_hard_weight: 0.90               # ESCALATE weight threshold for hard-escalate
+  clear_hard_weight: 0.90                  # CLEAR weight threshold for hard-clear
+  low_score_clear_threshold: 30.0          # Match score below which low_score rule fires
+  dob_mismatch_high_score_threshold: 80.0  # Score above which DOB mismatch uses contested weight (0.75)
   common_names_file: "data/common_names.txt"
-  age_improbability_max_years: 5           # Age (years) below which soft-clear fires
+  age_improbability_max_years: 5           # Customer age at sanctioning below which soft-clear fires
   min_signup_age: 18                       # Minimum age at account creation (DOB proxy)
 
 snowflake:
   enabled: true
   dob_history_table: "APP_CASH.HEALTH.IDENTITY_DOB_HISTORY"
+  customer_summary_table: "APP_CASH.APP.CUSTOMER_SUMMARY"
   account_table: "APP_CASH.APP.CASH_CUSTOMER_IDENTITY_W_AFTERPAY"
   account_id_col: "CUSTOMER_TOKEN"
   account_created_col: "CUSTOMER_CREATED_AT"
+  address_state_col: ""        # e.g. "STATE" — column in IDV table with US state; blank = skip
 
 ofac:
   enabled: true
   cache_path: "data/sdn_advanced.xml"
-  max_age_hours: 24
+  max_age_hours: 24            # Re-download after this many hours; OFAC updates daily
 
 tlo:
-  enabled: false          # Enable once TLOXP_API_KEY + TLOXP_API_URL are provisioned
+  enabled: false               # Enable once TLOXP_API_KEY + TLOXP_API_URL are provisioned
 ```
 
 ---

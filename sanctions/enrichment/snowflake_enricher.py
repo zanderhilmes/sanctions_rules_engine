@@ -97,6 +97,7 @@ class SnowflakeEnricher:
         account_created_col: str = "CREATED_AT",
         dob_history_table: str = "APP_CASH.HEALTH.IDENTITY_DOB_HISTORY",
         customer_summary_table: str = "APP_CASH.APP.CUSTOMER_SUMMARY",
+        address_state_col: str = "",
     ) -> None:
         if not _SF_AVAILABLE:
             raise RuntimeError(
@@ -110,6 +111,7 @@ class SnowflakeEnricher:
         self._account_created_col = account_created_col
         self._dob_history_table = dob_history_table or ""
         self._customer_summary_table = customer_summary_table or ""
+        self._address_state_col = address_state_col or ""
 
         connect_kwargs: dict = dict(
             account=account,
@@ -178,6 +180,16 @@ class SnowflakeEnricher:
                 log.info(
                     "[snowflake] Alert %s: backfilled customer_dob=%s from CUSTOMER_SUMMARY",
                     alert.alert_id, dob,
+                )
+
+        # ---- IDV-confirmed customer state (for country mismatch rule) ----
+        if self._address_state_col and not alert.customer_state:
+            state = self._lookup_customer_state(alert.account_id)
+            if state:
+                alert.customer_state = state
+                log.info(
+                    "[snowflake] Alert %s: backfilled customer_state=%s from IDV address",
+                    alert.alert_id, state,
                 )
 
         # Account creation date — only when table is configured
@@ -291,6 +303,42 @@ class SnowflakeEnricher:
             return None
 
         return _build_dob(row[0], None, None)  # year-only → 'YYYY'
+
+    def _lookup_customer_state(self, account_id: str) -> Optional[str]:
+        """
+        Return the customer's US state from a successful IDV attempt.
+
+        Queries the IDV attempts table (self._table) for the most recent
+        ATTEMPT_SUCCESSFUL=TRUE row and returns the value of self._address_state_col.
+
+        Configure via snowflake.address_state_col in config.yaml, e.g.:
+            address_state_col: "STATE"          # or "RESIDENTIAL_STATE", etc.
+
+        Returns a state string (e.g. "CA", "California") or None on miss/error.
+        """
+        query = (
+            f"SELECT {self._address_state_col} "
+            f"FROM {self._table} "
+            f"WHERE {_ACCOUNT_ID_COL} = %s "
+            f"  AND ATTEMPT_SUCCESSFUL = TRUE "
+            f"ORDER BY {_TIMESTAMP_COL} DESC "
+            f"LIMIT 1"
+        )
+        try:
+            cur = self._conn.cursor()
+            cur.execute(query, (account_id,))
+            row = cur.fetchone()
+            cur.close()
+        except Exception as exc:
+            log.warning("[snowflake] Address lookup failed for %s: %s", account_id, exc)
+            return None
+
+        if row is None or row[0] is None:
+            log.debug("[snowflake] No IDV address record for customer_token=%s", account_id)
+            return None
+
+        state = str(row[0]).strip()
+        return state if state else None
 
     def _lookup_account_created(self, account_id: str) -> Optional[str]:
         """

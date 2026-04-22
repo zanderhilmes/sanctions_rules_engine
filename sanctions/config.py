@@ -63,6 +63,11 @@ class SnowflakeConfig(BaseModel):
     dob_history_table: str = "APP_CASH.HEALTH.IDENTITY_DOB_HISTORY"
     # Customer summary table — BIRTH_YEAR fallback when DOB history is absent
     customer_summary_table: str = "APP_CASH.APP.CUSTOMER_SUMMARY"
+    # IDV address lookup — populates customer_state for the country mismatch rule.
+    # Set to the column name in the IDV table that holds the customer's US state.
+    # Leave blank to skip (rule will not fire until this is configured).
+    # e.g. "STATE" or "RESIDENTIAL_STATE" depending on your schema.
+    address_state_col: str = ""
 
 
 class TLOConfig(BaseModel):

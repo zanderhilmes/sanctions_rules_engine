@@ -4,12 +4,24 @@ AliasMatchRule — checks the customer name against all SDN aliases.
 From the guide: "Make sure the alias does not match as well."
 
 A name mismatch against the primary SDN name is NOT sufficient to clear if
-any alias matches. This rule fires ESCALATE (weight 0.80 → PENDING → LLM)
-when the customer name tokens match any SDN alias using the same token-set
-logic as NameComponentRule.
+any alias matches. This rule fires HARD ESCALATE (weight 0.95) when the
+customer name tokens match any SDN alias using the same token-set logic as
+NameComponentRule.
 
-Weight is intentionally below the hard-escalate threshold (0.90) so alias
-matches proceed to DOB check and then LLM review rather than auto-escalating.
+Weight 0.95 (hard escalate) ensures alias matches always route through the
+registry's contested or escalation paths:
+  - Alias match + hard DOB mismatch (weight 0.90 CLEAR): hard clear takes
+    registry priority 1 → AUTO_CLEAR. A decisive DOB gap still clears.
+  - Alias match + contested DOB mismatch (weight 0.75, high score + unverified):
+    hard_escalate + max_clear (0.75) >= contested threshold (0.70) → PENDING → LLM.
+    LLM adjudicates when an alias matches and DOB is unverified.
+  - Alias match + no DOB: hard escalate alone → ESCALATE.
+
+Previously used weight 0.80 (soft escalate), which only subtracted from
+clear_score without setting hard_escalate. This allowed cases to AUTO_CLEAR
+when name_components (0.85) and dob_mismatch (0.75) together outweighed the
+soft penalty: 0.85 - 0.80 + 0.75 = 0.80 >= 0.65 threshold, bypassing LLM
+entirely despite an alias match.
 
 Alias matching cases (mirrors NameComponentRule):
   - Customer tokens == alias tokens (any order) → ESCALATE
@@ -27,7 +39,7 @@ from sanctions.models import Alert, RuleFlag
 from sanctions.rules.base_rule import BaseRule
 from sanctions.rules.rule_name_components import _tokenize
 
-_ESCALATE_WEIGHT = 0.80  # Below hard-escalate threshold (0.90) → PENDING → LLM review
+_ESCALATE_WEIGHT = 0.95  # Hard escalate — alias match always routes to LLM or escalation
 
 
 class AliasMatchRule(BaseRule):
@@ -37,7 +49,7 @@ class AliasMatchRule(BaseRule):
     Priority 6 — runs immediately after NameComponentRule.
     """
     name = "alias_match"
-    weight = 0.95
+    weight = _ESCALATE_WEIGHT
     priority = 6
 
     def evaluate(self, alert: Alert) -> RuleFlag:

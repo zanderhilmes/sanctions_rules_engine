@@ -42,10 +42,12 @@ _NS = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/export
 _LAST_NAME_TYPE  = "1520"
 _FIRST_NAME_TYPE = "1521"
 _MIDDLE_NAME_TYPE = "1522"
-_INDIVIDUAL_NAME_TYPES = {_LAST_NAME_TYPE, _FIRST_NAME_TYPE, _MIDDLE_NAME_TYPE}
+# 91708 = Paternal Surname / 91709 = Maternal Surname (used in Hispanic naming conventions)
+_INDIVIDUAL_NAME_TYPES = {_LAST_NAME_TYPE, _FIRST_NAME_TYPE, _MIDDLE_NAME_TYPE, "91708", "91709"}
 
-# FeatureTypeID for Birthdate
+# FeatureTypeID for Birthdate and Place of Birth
 _BIRTHDATE_FEATURE_TYPE = "8"
+_PLACE_OF_BIRTH_FEATURE_TYPE = "9"
 
 
 def _q(tag: str) -> str:
@@ -101,6 +103,27 @@ def _tokenize_name(name: str) -> FrozenSet[str]:
     return frozenset(t.upper() for t in normalized.split() if t)
 
 
+def _country_from_pob(pob_text: str) -> Optional[str]:
+    """
+    Extract a country name from a free-text Place of Birth string.
+
+    OFAC POB strings range from simple ('Mexico') to compound
+    ('Najf Al Ashraf (Najaf), Iraq', 'Giza, Egypt').  The country is
+    consistently the last comma-separated token.
+
+    Returns None for empty, obviously non-country values, or
+    strings that are clearly sub-national (e.g. a single US state).
+    """
+    if not pob_text:
+        return None
+    # Take the last comma-separated segment and strip trailing parentheticals
+    country = pob_text.split(",")[-1].strip()
+    country = re.sub(r"\s*\([^)]*\)\s*$", "", country).strip()
+    if not country or len(country) < 2:
+        return None
+    return country
+
+
 class OFACEnricher:
     """
     Enriches an Alert with sdn_dob by looking up the matched SDN entity name
@@ -122,6 +145,8 @@ class OFACEnricher:
         self._date_added: Dict[str, str] = {}
         # name tokens → profile_ids (used to resolve date_added via name lookup)
         self._name_to_profile: Dict[FrozenSet[str], List[str]] = {}
+        # name tokens → country of birth (for sdn_country backfill)
+        self._pob_index: Dict[FrozenSet[str], List[str]] = {}
         xml_data = self._get_xml(xml_url, cache_path, max_age_hours, timeout_seconds)
         self._build_index(xml_data)
 
@@ -200,21 +225,29 @@ class OFACEnricher:
             if profile is None:
                 continue
 
-            # ---- Collect DOBs from Birthdate features (FeatureTypeID=8) ----
+            # ---- Collect DOBs and Place of Birth from features ----
             dobs: List[str] = []
+            pob_countries: List[str] = []
             for feat in profile.findall(_q("Feature")):
-                if feat.get("FeatureTypeID") != _BIRTHDATE_FEATURE_TYPE:
-                    continue
-                for fv in feat.findall(_q("FeatureVersion")):
-                    dp = fv.find(_q("DatePeriod"))
-                    if dp is None:
-                        continue
-                    dob = _build_dob_from_period(dp)
-                    if dob:
-                        dobs.append(dob)
+                ftype = feat.get("FeatureTypeID")
+                if ftype == _BIRTHDATE_FEATURE_TYPE:
+                    for fv in feat.findall(_q("FeatureVersion")):
+                        dp = fv.find(_q("DatePeriod"))
+                        if dp is None:
+                            continue
+                        dob = _build_dob_from_period(dp)
+                        if dob:
+                            dobs.append(dob)
+                elif ftype == _PLACE_OF_BIRTH_FEATURE_TYPE:
+                    for fv in feat.findall(_q("FeatureVersion")):
+                        vd = fv.find(_q("VersionDetail"))
+                        if vd is not None and vd.text:
+                            country = _country_from_pob(vd.text.strip())
+                            if country:
+                                pob_countries.append(country)
 
-            if not dobs:
-                continue  # No usable DOB — skip entry
+            if not dobs and not pob_countries:
+                continue  # No usable identity data — skip entry
 
             # ---- Build NamePartGroupID → NamePartTypeID map ----
             for identity in profile.findall(_q("Identity")):
@@ -251,15 +284,20 @@ class OFACEnricher:
                             continue
                         tokens = _tokenize_name(" ".join(parts))
                         if tokens:
-                            self._index.setdefault(tokens, []).extend(dobs)
+                            if dobs:
+                                self._index.setdefault(tokens, []).extend(dobs)
+                            if pob_countries:
+                                self._pob_index.setdefault(tokens, []).extend(pob_countries)
                             if profile_id:
                                 self._name_to_profile.setdefault(tokens, []).append(profile_id)
 
                 individuals_with_dob += 1
 
+        individuals_with_pob = sum(1 for v in self._pob_index.values() if v)
         log.info(
-            "[ofac] Index built: %d individuals with DOB data (%d unique name-token sets)",
-            individuals_with_dob, len(self._index),
+            "[ofac] Index built: %d individuals with DOB data, %d with country/POB"
+            " (%d unique name-token sets)",
+            individuals_with_dob, individuals_with_pob, len(self._index),
         )
 
     def enrich(self, alert) -> None:
@@ -269,6 +307,10 @@ class OFACEnricher:
         except Exception as exc:
             log.warning("[ofac] Enrichment error for alert %s: %s", alert.alert_id, exc)
 
+    # Minimum fraction of alert SDN name tokens that must appear in an OFAC
+    # index entry's token set to be considered a match.
+    _MATCH_THRESHOLD = 0.92
+
     def _enrich(self, alert) -> None:
         if not alert.sdn_name:
             return
@@ -277,11 +319,31 @@ class OFACEnricher:
         if not tokens:
             return
 
+        # ---- Threshold matching: scan index for entries where ≥92% of the
+        #      alert SDN name tokens appear in the OFAC entry's token set.
+        #      This handles cases where the Bridger SDN name is a shorter form
+        #      of the canonical OFAC name (e.g. "Gerardo Ibarra" matches
+        #      "Gerardo RIVERA IBARRA" because both GERARDO and IBARRA are
+        #      present in the OFAC entry). ----
+        matched_dobs: List[str] = []
+        matched_profile_ids: List[str] = []
+        matched_countries: List[str] = []
+
+        # Scan DOB index (superset of POB index — any entry with DOB or country)
+        all_token_sets = set(self._index.keys()) | set(self._pob_index.keys())
+        for index_tokens in all_token_sets:
+            overlap = len(tokens & index_tokens) / len(tokens)
+            if overlap >= self._MATCH_THRESHOLD:
+                matched_dobs.extend(self._index.get(index_tokens, []))
+                matched_countries.extend(self._pob_index.get(index_tokens, []))
+                matched_profile_ids.extend(
+                    self._name_to_profile.get(index_tokens, [])
+                )
+
         # ---- Backfill sdn_dob ----
         if not alert.sdn_dob:
-            matches = self._index.get(tokens)
-            if matches:
-                unique_dobs = list(dict.fromkeys(matches))
+            if matched_dobs:
+                unique_dobs = list(dict.fromkeys(matched_dobs))
                 if len(unique_dobs) == 1:
                     alert.sdn_dob = unique_dobs[0]
                     log.info(
@@ -298,9 +360,8 @@ class OFACEnricher:
 
         # ---- Backfill sdn_date_added ----
         if not alert.sdn_date_added:
-            profile_ids = self._name_to_profile.get(tokens)
-            if profile_ids:
-                unique_ids = list(dict.fromkeys(profile_ids))
+            if matched_profile_ids:
+                unique_ids = list(dict.fromkeys(matched_profile_ids))
                 if len(unique_ids) == 1:
                     date_added = self._date_added.get(unique_ids[0])
                     if date_added:
@@ -309,3 +370,18 @@ class OFACEnricher:
                             "[ofac] Alert %s: backfilled sdn_date_added=%s for SDN '%s'",
                             alert.alert_id, date_added, alert.sdn_name,
                         )
+
+        # ---- Backfill sdn_country (from Place of Birth) ----
+        if not alert.sdn_country and matched_countries:
+            unique_countries = list(dict.fromkeys(matched_countries))
+            if len(unique_countries) == 1:
+                alert.sdn_country = unique_countries[0]
+                log.info(
+                    "[ofac] Alert %s: backfilled sdn_country=%r for SDN '%s' (from POB)",
+                    alert.alert_id, alert.sdn_country, alert.sdn_name,
+                )
+            else:
+                log.debug(
+                    "[ofac] Alert %s: multiple POB countries %s for SDN '%s' — skipping",
+                    alert.alert_id, unique_countries, alert.sdn_name,
+                )

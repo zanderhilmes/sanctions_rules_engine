@@ -5,7 +5,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
-output/audit_trail.csv
-output/audit_trail.json
+output/
+data/sdn_advanced.xml
 data/sample_alerts.csv
 .DS_Store

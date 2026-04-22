@@ -57,6 +57,11 @@ class SanctionsPipeline:
             high_score_threshold=config.rules.dob_mismatch_high_score_threshold,
         ))
         self.registry.register(MissingDOBRule())
+        # CountryMismatchRule is DISABLED — pending two data sources:
+        #   1. Customer: confirmed US address from IDV tables (configure snowflake.address_state_col)
+        #   2. SDN:      reliable non-POB location signal (OFAC POB ≠ current residence)
+        # from sanctions.rules.rule_country_mismatch import CountryMismatchRule
+        # self.registry.register(CountryMismatchRule())
         self.registry.register(
             AgeImprobabilityRule(
                 age_improbability_max_years=config.rules.age_improbability_max_years,
@@ -86,6 +91,7 @@ class SanctionsPipeline:
                     account_created_col=sf.account_created_col,
                     dob_history_table=sf.dob_history_table,
                     customer_summary_table=sf.customer_summary_table,
+                    address_state_col=sf.address_state_col,
                 )
             except Exception as exc:
                 log.warning("Snowflake enricher disabled — connection failed: %s", exc)
